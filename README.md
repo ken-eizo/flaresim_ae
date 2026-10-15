@@ -1,81 +1,430 @@
 # FlareSimAE
 
-**FlareSimAE** is an experimental, native **Adobe After Effects** lens-flare plugin based on the optical modeling from [flaresim_nuke](https://github.com/LocalStarlight/flaresim_nuke). It simulates multiple reflections in a photographic lens to generate ghost flares from a lens prescription.
+A CUDA-accelerated After Effects plugin for physically-based lens flare simulation.
+FlareSimAE traces rays through real lens prescriptions to produce ghost
+reflections that respond to source position, wavelength, and aperture shape —
+without artist-painted flare textures.
 
-This is an **unofficial, work-in-progress After Effects adaptation**, not an Adobe product or an official release by the upstream maintainers.
+FlareSimAE is an unofficial After Effects adaptation of
+[FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke).
+This is a **developer preview**: the source builds and passes automated tests,
+but the latest build has not been fully validated inside After Effects.
 
-## Current development status
+---
 
-- Windows x64 with an NVIDIA CUDA path and CPU fallback.
-- Native AE effect with SmartFX integration and a compact custom Effect Controls lens editor.
-- Camera-lens presets derived from the original Nuke repository, including an embedded catalog of 1,370 `.lens` prescriptions.
-- Geometric two-bounce ghost tracing with wavelength-dependent refraction, Fresnel weighting, and selectable spectral samples.
-- Manual light source placement or automatic bright-source detection from the effect's input layer.
-- Diffraction/starburst and veiling-haze components, composite/flare-only/ghost-only and source-preview modes.
-- The custom lens prescription is stored using AE Arbitrary Data. Numeric prescription properties interpolate between keyframes; changes in surface count are held until the next keyframe.
-- Source-direction CUDA precomputation, bounded GPU scratch allocation, and host-independent tests.
+## Credits
 
-**Important:** the most recent build was verified by automated native host-mock, CUDA and optics regression tests (**24/24 passed**). Custom editor keyframe interaction, rendering, cancellation, and UI behavior in an actual After Effects session **have not yet been revalidated** for this build. This repository is a **developer preview**, not a stable public binary release.
+FlareSimAE is built on [**FlareSim for Nuke**](https://github.com/LocalStarlight/flaresim_nuke),
+developed by **Steve Watts Kennedy** ([@LocalStarlight](https://github.com/LocalStarlight)).
 
-## Building from source
+FlareSim itself is built on the foundational work of **Eamonn Nugent**
+([@space55](https://github.com/space55) · [55.dev](https://55.dev/)),
+whose original CPU-based lens flare renderer established the ray-tracing
+approach, optical physics, and lens file format used by these projects.
+The original codebase is
+[github.com/space55/blackhole-rt](https://github.com/space55/blackhole-rt/).
 
-The project currently builds on **Windows** using CMake, Visual Studio 2022, the **Adobe After Effects C++ SDK** and optionally the NVIDIA CUDA Toolkit.
+The After Effects adaptation is developed by
+[**ken-eizo**](https://github.com/ken-eizo).
+The original optical code, lens prescriptions, and copyright notices are
+preserved in [upstream/](upstream/).
+See [LICENSE](LICENSE), [upstream/LICENSE](upstream/LICENSE), and
+[NOTICE.md](NOTICE.md).
 
-The Adobe SDK is **not redistributed**. Download it separately from Adobe and point `AE_SDK_ROOT` to its `Examples` directory.
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  -DAE_SDK_ROOT="C:/path/to/AfterEffectsSDK/Examples" `
-  -DFLARELENS_ENABLE_CUDA=ON
-
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-The built plugin is `build/Release/FlareLensAE.aex`.
-
-See [INSTALL.md](INSTALL.md) for details and known limitations. Neither a local GizmoSearchAE checkout nor the original Nuke application is required to compile the AE source.
+---
 
 ## How it works
 
-1. **Lens prescription:** spherical/planar optical surfaces with curvature, spacing, refractive index, dispersion and coating.
-2. **Sources:** a manual source or bright regions identified from the effect's own input layer (not the entire underlying AE composition).
-3. **Ghost paths:** two reflective surfaces define a double-bounce optical path. Refracted and reflected rays are propagated to the sensor plane.
-4. **Rendering:** pupil samples and wavelength samples contribute HDR light to the image; optional diffraction, haze and compositing are applied separately.
+FlareSimAE takes an image as input. It can treat its bright pixels as light
+sources, or use a manually positioned source. For each source it fires a grid
+of rays across the entrance pupil of the lens, tracing them through the
+optical surfaces. Two surfaces reflect the ray rather than transmitting it:
+this is a ghost bounce pair. The ray then continues to the sensor plane,
+where its contribution is accumulated in the output image.
 
-The current FFT-generated diffraction component does **not** amount to a complete wave-optical model of internal lens reflections. The geometric ghost renderer also is **not** identical to a generic full-frame FFT bloom convolution.
+Because the tracing is based on the lens geometry, ghosts exhibit:
 
-## GPU performance
+- **Correct position** — each ghost moves according to the optical surfaces,
+  rather than sliding a fixed image across the frame.
+- **Chromatic aberration** — different wavelengths refract and reflect
+  differently, producing colour-dependent ghost shapes.
+- **Aperture shape** — circular or polygonal pupil samples influence the
+  footprint of each ghost.
+- **Fresnel weighting** — reflections are weighted by surface reflectance,
+  including the modeled anti-reflection coatings.
 
-Performance strongly depends on `ray grid × ray grid × wavelength count × source count × active ghost-pair count`. Benchmarks below use an RTX 2070 SUPER, 1920×1080, one Nikkor 50mm f/1.2 preset, single-source ghost-only mode, and **exclude After Effects timeline scheduling and cache costs**.
+The optical ghost renderer uses geometric ray tracing. Diffraction,
+starburst, and veiling haze are separate components. The FFT-based
+diffraction calculation is **not** a complete wave-optical simulation of
+every internal lens reflection.
 
-| Ray grid | Wavelengths | Ghost pairs | Example CUDA median |
-| ---: | ---: | ---: | ---: |
-| 512 | 3 | 1 | 2.55 ms |
-| 512 | 7 | 1 | 4.19 ms |
-| 512 | 3 | 78 | 87–112 ms (varied between runs) |
+The Windows GPU implementation uses the CUDA stream supplied by the After
+Effects host. A CPU render path is also provided. Native Vulkan and macOS
+Metal implementations are not currently available.
 
-These are **examples, not a 10ms guarantee**. The full 78-pair scene takes far longer than a one-pair render.
+---
 
-For reproducible tests and optimization notes, see [CUDA and Vulkan performance](docs/GPU_PERFORMANCE.md).
+## Installation
 
-## Supported and unsupported environments
+See **[INSTALL.md](INSTALL.md)** for a step-by-step source build and manual
+installation guide. Pre-built release packages have not yet been published.
 
-- **Implemented:** Windows x64; NVIDIA CUDA; CPU rendering path.
-- **Not verified for this build:** interactive real-AE behavior, many GPU/CPU fallback combinations, the full spectrum of host configurations.
-- **Not available:** native macOS/Metal binary or native Vulkan compute renderer.
-- **Not guaranteed:** realtime full-quality output for arbitrary light counts, lenses or Ray Grid settings.
+**Quick version:** download the source, install the Adobe After Effects SDK
+and (for GPU support) the NVIDIA CUDA Toolkit, configure and build with
+CMake, and copy the resulting `FlareLensAE.aex` into an After Effects
+plug-in folder. Restart After Effects after installation.
+
+**Requirements:**
+- **Platform:** Windows x64 (current source build)
+- **Host:** Adobe After Effects with a compatible native effect plug-in API;
+  the newest build still needs manual host validation
+- **Build tools:** CMake 3.24+, Visual Studio 2022 with the Windows SDK
+- **GPU:** NVIDIA CUDA for GPU rendering; CPU rendering is also available
+- **SDK:** Adobe After Effects C++ SDK, downloaded separately
+
+---
+
+## Quick start
+
+1. Apply **FlareSimAE** to the footage or precomposition containing your light
+   sources. To use automatic detection, the bright pixels must be present in
+   the **effect's own input layer**.
+2. Open **Browse All Nuke Lenses** to choose from the 1,370 embedded
+   prescriptions, or select **Custom Lens** to edit the optical surfaces.
+3. Set **Horizontal FOV**, or enable **Use Sensor Dimensions** to enter
+   sensor width, height, and camera focal length.
+4. For automatic sources, enable **Detect Bright Sources** and lower
+   **Source Threshold** until the intended highlights register. Select
+   **Sources Preview** in **Output Mode** to see the detected positions
+   without running the expensive ghost render.
+5. Adjust **Flare Gain**, **Ray Grid**, and **Spectral Samples**. For a quick
+   manual test, leave detection off and use **Light Position** and
+   **Manual Source Radiance**.
+6. Use **Ghost Pair Selection** to render all pairs, a selected pair, or all
+   pairs except the selected one.
+
+**Note:** Source Threshold uses scene-linear luminance. Its default value of
+`2.0` is above ordinary SDR white (`1.0`). Use sufficiently bright HDR input
+or reduce the threshold while testing.
+
+---
+
+## Output channels
+
+Unlike the Nuke version, which can write separate named channel groups such
+as `flare.rgb` and `source.rgb`, the After Effects version exposes its
+components through **Output Mode**.
+
+| Output Mode | Contents |
+|-------------|----------|
+| **Composite** | Input image combined with the enabled flare components |
+| **Flare Only** | Flare contribution without the original image |
+| **Sources Preview** | Markers at detected or manual light positions; skips optical ghost tracing |
+| **Ghost Only** | Lens-reflection ghosts |
+| **Haze Only** | Veiling haze |
+| **Starburst Only** | Aperture diffraction pattern |
+| **Ray Hits Preview** | Diagnostic view of optical ray hits |
+| **Optical Diagnostics** | Diagnostic rendering for troubleshooting |
+
+These are selectable outputs of the same effect, **not** additional Nuke-style
+named image channels. Some diagnostic and starburst modes use the CPU path
+rather than the CUDA render path.
+
+---
+
+## Parameters
+
+### Ghost
+
+**Light Position**
+Position of a manual light source in the composition. This supports
+off-frame source placement.
+
+**Manual Source Radiance**
+Scene-linear HDR intensity of the manually positioned source. This is
+independent of the UI colour swatch; small values may produce nearly
+invisible ghosts after multiple Fresnel reflections.
+
+**Manual Source Diameter (px)**
+Reference diameter used to model a finite-sized manual light. It is not
+an independent bitmap flare texture.
+
+**Light Tint**
+RGB tint applied to the source contribution.
+
+**Flare Gain**
+Overall intensity multiplier for ghost reflections. Because a ghost path
+involves two reflections, physically weighted contributions may be very
+small. Use this separately from source radiance when adjusting appearance.
+
+**Ray Grid**
+Number of entrance-pupil samples per dimension. A value of `N` produces
+`N²` samples for each source and ghost-pair combination. Higher values
+can produce smoother ghosts but increase ray-tracing work quadratically.
+
+**Pupil Sampling**
+Sampling patterns: *Regular*, *Stratified*, *Halton*, and *Golden Angle*.
+
+**Jitter Seed / Auto Jitter Seed**
+Control the stochastic pupil-sampling pattern where relevant. Automatic
+seeding uses the frame time; the resulting variation should be considered
+when choosing temporal quality settings.
+
+**Detect Bright Sources**
+Enables detection of highlights in the effect's input image rather than
+using only the manual light.
+
+**Source Threshold**
+Minimum scene-linear luminance for automatic source detection. Raising
+this suppresses dim highlights and can greatly reduce rendering time.
+
+**Maximum Sources**
+Hard limit on the number of detected sources (1–2048). The brightest
+candidates are retained when the limit is reached.
+
+**Source Cap**
+Optional limit on source luminance. `0` disables the cap.
+
+**Scan Step**
+Tile size used by automatic source scanning. The implementation averages
+colour within tiles rather than treating each pixel as a separate light.
+Smaller values can find more detail but may generate more sources.
+
+**Cluster Radius**
+Optional radius for combining nearby bright-source candidates.
+`0` disables clustering. This is not full image-region segmentation.
+
+**Gate Detection with Input Alpha**
+Optionally attenuates detection by source alpha.
+
+---
+
+### Preview Mode
+
+**Use Preview Quality**
+Overrides the render settings with lighter preview values.
+
+**Preview Ray Grid / Preview Max Sources / Preview Scan Step /
+Preview Spectral**
+Lower-cost counterparts to the corresponding production settings. The
+automatic-source preview includes compensation for the reduced detection
+sampling density where applicable.
+
+**Adaptive Quality for Reduced Resolution**
+Can lower optical sampling for reduced-resolution After Effects previews.
+Full-resolution output retains its configured final-quality settings.
+
+---
+
+### Camera
+
+**Horizontal FOV**
+Horizontal field of view in degrees, used to convert source positions
+into the ray angles seen by the lens.
+
+**Vertical FOV Override**
+Optional vertical field of view. When disabled, the image aspect ratio
+determines the vertical coverage.
+
+**Use Sensor Dimensions**
+Computes field of view from physical camera specifications instead of
+directly entering the FOV.
+
+**Sensor Width mm / Sensor Height mm / Camera Focal Length mm**
+Physical camera parameters used with **Use Sensor Dimensions**.
+
+---
+
+### Aperture
+
+**Aperture Blades**
+`0` represents a circular aperture. Values from `3` to `16`
+represent polygonal apertures. The setting influences ghost footprints
+and the generated diffraction pattern.
+
+**Aperture Rotation**
+Rotates the polygonal aperture in degrees.
+
+---
+
+### Spectral
+
+**Spectral Samples**
+Number of wavelength samples used for ghost tracing:
+`3 RGB`, `5`, `7`, `9`, or `11` wavelengths.
+More wavelengths can provide smoother colour separation at higher cost.
+
+---
+
+### Post-process
+
+**Ghost Blur Radius / Ghost Blur Passes**
+Controls smoothing of the ghost contribution after ray tracing.
+
+**Veiling Haze Gain / Haze Radius / Haze Blur Passes**
+Controls the broad scattered-light component. A gain of `0` disables it.
+
+---
+
+### Starburst
+
+**Diffraction Gain**
+Controls the starburst/diffraction component. A gain of `0` disables it.
+
+The diffraction pattern is generated from the aperture using an FFT-based
+Fraunhofer model. This models aperture diffraction but should not be
+confused with a full wave-optical treatment of lens-internal ghosts.
+
+**Diffraction Scale**
+Controls the spatial extent of the diffraction pattern.
+
+---
+
+### Diagnostics
+
+**Development Host Trace**
+Enables diagnostic host logging for source detection, optical
+contributions and GPU/CPU rendering paths.
+
+**Ray Hits Preview / Optical Diagnostics**
+Available through **Output Mode**. These help distinguish an optical
+intersection problem from a brightness or exposure problem.
+
+---
+
+### Output
+
+**Output Mode**
+Selects the image components displayed in the effect output. See
+[Output channels](#output-channels) for the full list.
+
+---
+
+## Ghost pair selection
+
+The original Nuke plugin has a dedicated Pairs tab. The After Effects
+version instead exposes **Ghost Pair Selection** in its native effect
+controls:
+
+- **All Pairs** — render all active pairs from the selected lens.
+- **Only Selected Pair** — render a single pair for inspection.
+- **Exclude Selected Pair** — render all active pairs except one.
+
+**Front Surface Index / Rear Surface Index**
+Identify the selected reflecting surfaces using the AE control's
+1-based indices. These are converted internally to optical surface
+indices.
+
+The current AE UI does not provide the Nuke plug-in's full per-pair
+checkbox list. Selecting fewer pairs can dramatically reduce render time.
+
+---
+
+## Lens files
+
+FlareSimAE retains the original Nuke `.lens` prescription format.
+Each file describes an ordered set of optical surfaces from the front
+of a lens towards the sensor:
+
+```text
+name: Example Lens
+focal_length: 50.0
+
+surfaces:
+# radius  thickness  ior    abbe   semi_ap  coating
+  40.0     5.0      1.670   47.2    24.0      1
+ -80.0     3.0      1.000    0.0    24.0      0
+  stop     4.0      1.000    0.0    14.0      0
+  ...
+```
+
+| Column | Meaning |
+|--------|---------|
+| `radius` | Signed radius of curvature in millimetres; `0` is planar |
+| `thickness` | Axial distance to the next surface |
+| `ior` | Refractive index of the medium following the surface |
+| `abbe` | Abbe number describing dispersion |
+| `semi_ap` | Clear semi-diameter of the optical surface |
+| `coating` | Surface coating setting |
+
+The original 1,370 prescriptions are preserved in
+[upstream/lenses/lens_files/](upstream/lenses/lens_files/).
+At build time they are embedded in the `.aex` as read-only resources,
+so installation does **not** require copying 1,370 separate files.
+
+**Lens Selection**
+Switches between the embedded **Complete Nuke Catalog** and the
+editable **Custom Lens**. Use **Browse All Nuke Lenses** to find
+catalog entries by name.
+
+**Custom Lens / Initialize Custom Lens**
+The AE-native editor can modify optical surfaces. **Initialize Custom
+Lens** copies the currently selected catalog prescription into the
+editable document. Its data is saved inside the AE project with
+Arbitrary Data.
+
+Numeric fields can interpolate between AE keyframes. Changes in the
+number of surfaces use hold interpolation to avoid matching unrelated
+optical surfaces. These callbacks have passed automated tests; the
+complete timeline UI/save-and-reopen workflow still needs manual AE
+validation.
+
+---
+
+## Render behaviour
+
+FlareSimAE is a native After Effects SmartFX plug-in, not a Nuke node.
+The host may request different regions, resolutions, frames, or multiple
+frames concurrently. Its automatic source detector needs access to the
+effect's input image, while the optical renderer projects contributions
+to the final frame.
+
+The CUDA path renders using a host-managed CUDA stream. Unsupported
+render modes can fall back to CPU. Render cancellation, frame
+evaluation, cache behaviour, multi-frame rendering and actual
+timeline frame times depend on After Effects and require in-host
+testing in addition to standalone GPU benchmarks.
+
+The latest Windows source build passed **24/24 automated tests**, but
+that result does **not** establish full validation in After Effects.
+
+---
+
+## Performance tips
+
+- **Ray Grid** is a major render-time lever. Increasing it from 64 to
+  512 multiplies pupil samples by 64.
+- **Source Threshold / Maximum Sources** prevent accidental
+  runaway renders on footage with hundreds of bright highlights.
+- **Ghost Pair Selection** makes it possible to isolate one pair when
+  studying a lens or adjusting optical parameters.
+- **Preview Quality** can use a smaller pupil grid and fewer spectral
+  samples for interactive work.
+- **Lens complexity** matters: the full ray-tracing workload is roughly
+  proportional to `grid² × sources × ghost pairs × wavelengths`.
+
+On an RTX 2070 SUPER, a standalone 1920×1080 CUDA test with Ray Grid
+512 took about **2.55 ms** for one ghost pair / one source / three
+wavelengths, but approximately **87–112 ms** for 78 pairs. These are
+test measurements, **not** guaranteed AE timeline render times.
+
+See [GPU performance](docs/GPU_PERFORMANCE.md) for conditions and
+limitations.
+
+---
 
 ## Development
 
-The source includes `src/` (AE integration), `upstream/src/` (original optical foundation), `upstream/lenses/` (prescriptions), `tests/` (unit, host-mock, CUDA and parity tests) and `docs/` (selected engineering notes). The CMake build embeds the 1,370 optical prescriptions and builds without Nuke.
+The current source supports Windows x64 builds with Visual Studio,
+CMake, and the Adobe After Effects SDK. CUDA acceleration is optional
+at build time; no proprietary Adobe SDK files are included in this
+repository.
 
-See [architecture](docs/ARCHITECTURE.md), [keyframe animation](docs/KEYFRAME_ANIMATION.md), and [CUDA/Vulkan performance](docs/GPU_PERFORMANCE.md). Contributions, measurements and compatibility reports are welcome. Please distinguish results measured in a standalone test from performance displayed by After Effects.
+See [INSTALL.md](INSTALL.md) for compilation,
+[Architecture](docs/ARCHITECTURE.md) for the rendering system, and
+[Keyframe animation](docs/KEYFRAME_ANIMATION.md) for the saved custom
+lens data format.
 
-## Credits and license
-
-FlareSimAE is based on [LocalStarlight/flaresim_nuke](https://github.com/LocalStarlight/flaresim_nuke). Original ray-tracing work: **Eamonn Nugent**. Nuke plugin adaptation and further work: **Steve Watts Kennedy**. AE adaptation: **ken-eizo / contributors**.
-
-The upstream code is licensed under the **MIT License**. Preserve the original notices in [upstream/LICENSE](upstream/LICENSE). See [NOTICE.md](NOTICE.md) for attribution and third-party boundaries.
-
-The repository uses the MIT License; see [LICENSE](LICENSE). Adobe After Effects SDK files and NVIDIA proprietary libraries are **not** part of this repository and retain their respective licenses.
+The project is licensed under the MIT License, retaining the upstream
+copyright and attribution notices. See [LICENSE](LICENSE) and
+[NOTICE.md](NOTICE.md).
