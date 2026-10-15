@@ -7,8 +7,9 @@ without artist-painted flare textures.
 
 FlareSimAE is an unofficial After Effects adaptation of
 [FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke).
-This is a **developer preview**: the source builds and passes automated tests,
-but the latest build has not been fully validated inside After Effects.
+The public release starts at **v1.0.0**. The source builds and passes
+automated tests, but not every host configuration and user interaction has
+been fully validated inside After Effects.
 
 ---
 
@@ -72,7 +73,8 @@ build instructions, including troubleshooting.
 **Quick version:** download the Windows ZIP from
 [GitHub Releases](https://github.com/ken-eizo/flaresim_ae/releases), extract
 `FlareLensAE.aex` into the After Effects Plug-ins folder, and restart After
-Effects. This is a developer-preview build, not a fully validated stable release.
+Effects. The v1.0.0 release is the first public version; validate it on
+a test project before production use.
 The 1,370 lens prescriptions are already embedded in the `.aex`, so the
 included `lenses/` directory is optional reference data.
 

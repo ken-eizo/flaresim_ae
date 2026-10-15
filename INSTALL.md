@@ -3,9 +3,9 @@
 This guide walks you through installing FlareSimAE for After Effects on
 Windows, either from a pre-built ZIP or by compiling the native effect.
 
-The current release is a **developer preview**. Compilation and automated
-tests have passed on the development system, but the most recent build has
-not undergone complete interactive testing in After Effects.
+The first public release is **v1.0.0**. Compilation and automated tests have
+passed on the development system, but not all interactive workflows have been
+validated inside After Effects. Test on noncritical projects first.
 
 ---
 

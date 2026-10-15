@@ -40,7 +40,7 @@ inline void host_trace(bool enabled,const char* stage,const char* facts) noexcep
  char line[1600]={};
  const int length=std::snprintf(line,sizeof(line),
   "%04d-%02d-%02d %02d:%02d:%02d.%03d pid=%lu tid=%lu seq=%u "
-  "version=1.3.8 phase=%s %s\r\n",
+  "version=1.0.0 phase=%s %s\r\n",
   int(now.wYear),int(now.wMonth),int(now.wDay),
   int(now.wHour),int(now.wMinute),int(now.wSecond),int(now.wMilliseconds),
   GetCurrentProcessId(),GetCurrentThreadId(),id,stage?stage:"-",facts?facts:"");

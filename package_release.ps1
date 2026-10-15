@@ -2,7 +2,7 @@
 # FlareSim releases, adapted for After Effects on Windows.
 # The Adobe SDK and CUDA Toolkit are NOT copied into the package.
 param(
-    [string]$Version = 'v1.7.0-dev1',
+    [string]$Version = 'v1.0.0',
     [string]$BuildDir = (Join-Path $PSScriptRoot 'build'),
     [string]$OutputDir = (Join-Path $PSScriptRoot 'build')
 )
@@ -37,7 +37,7 @@ if ($lensCount -ne 1370) {
 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-$zipName = "FlareSimAE_${Version}_AE_Windows_CUDA.zip"
+$zipName = "FlareSimAE_${Version}_Windows.zip"
 $zipPath = Join-Path $OutputDir $zipName
 if (Test-Path -LiteralPath $zipPath) {
     throw "Release archive already exists; won't overwrite: $zipPath"
