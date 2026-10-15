@@ -25,7 +25,7 @@ The original codebase is
 [github.com/space55/blackhole-rt](https://github.com/space55/blackhole-rt/).
 
 The After Effects adaptation is developed by
-[**ken-eizo**](https://github.com/ken-eizo).
+[**ken-eizo**](https://github.com/ken-eizo), Codex.
 The original optical code, lens prescriptions, and copyright notices are
 preserved in [upstream/](upstream/).
 See [LICENSE](LICENSE), [upstream/LICENSE](upstream/LICENSE), and
