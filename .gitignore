@@ -1,0 +1,44 @@
+# Build trees and generated binaries (source remains under src/, upstream/, tests/)
+build/
+build-*/
+dist/
+.vs/
+.vscode/
+.idea/
+CMakeFiles/
+CMakeCache.txt
+Testing/
+*.aex
+*.dll
+*.exe
+*.pdb
+*.obj
+*.lib
+*.exp
+*.ilk
+*.pch
+*.tlog
+*.lastbuildstate
+*.vcxproj.user
+*.sln.docstates
+
+# Local diagnostics and test artifacts
+*.log
+*.tmp
+*.bak
+*.user
+__pycache__/
+*.pyc
+Thumbs.db
+.DS_Store
+
+# Preserve original upstream .lens files and licensing documents.
+
+# Historical machine-specific investigations retained only in the local workspace.
+# Public developer documentation lives in docs/ARCHITECTURE.md,
+# docs/KEYFRAME_ANIMATION.md and docs/GPU_PERFORMANCE.md.
+/docs/AE_*.md
+/docs/CUDA_*.md
+/docs/GPU_OPTIMIZATION_*.md
+/docs/UPSTREAM_PARITY.md
+*.zip

@@ -1,0 +1,16 @@
+#include <windows.h>
+#ifndef IDC_STATIC
+#define IDC_STATIC (-1)
+#endif
+16001 DIALOGEX 0, 0, 475, 330
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "FlareSimAE | Original Nuke Lens Catalog"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT       "Search brand, focal length or model (1370 Nuke prescriptions)",IDC_STATIC,12,10,448,13
+    EDITTEXT    16002,12,26,448,16,ES_AUTOHSCROLL | WS_TABSTOP
+    LISTBOX     16003,12,49,448,246,LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP | WS_BORDER
+    LTEXT       "All prescriptions are embedded in this .aex; no sidecar lenses needed.",IDC_STATIC,12,302,340,14
+    DEFPUSHBUTTON "Choose",IDOK,362,300,48,17
+    PUSHBUTTON  "Cancel",IDCANCEL,416,300,44,17
+END
