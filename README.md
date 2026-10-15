@@ -66,13 +66,18 @@ Metal implementations are not currently available.
 
 ## Installation
 
-See **[INSTALL.md](INSTALL.md)** for a step-by-step source build and manual
-installation guide. Pre-built release packages have not yet been published.
+See **[INSTALL.md](INSTALL.md)** for step-by-step installation and source
+build instructions, including troubleshooting.
 
-**Quick version:** download the source, install the Adobe After Effects SDK
-and (for GPU support) the NVIDIA CUDA Toolkit, configure and build with
-CMake, and copy the resulting `FlareLensAE.aex` into an After Effects
-plug-in folder. Restart After Effects after installation.
+**Quick version:** download the Windows ZIP from
+[GitHub Releases](https://github.com/ken-eizo/flaresim_ae/releases), extract
+`FlareLensAE.aex` into the After Effects Plug-ins folder, and restart After
+Effects. This is a developer-preview build, not a fully validated stable release.
+The 1,370 lens prescriptions are already embedded in the `.aex`, so the
+included `lenses/` directory is optional reference data.
+
+To build from source, obtain the Adobe After Effects SDK and NVIDIA CUDA
+Toolkit, then compile with CMake as described in the installation guide.
 
 **Requirements:**
 - **Platform:** Windows x64 (current source build)

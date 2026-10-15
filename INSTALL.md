@@ -1,12 +1,39 @@
 # FlareSimAE — Installation Guide
 
-This guide walks you through building and installing FlareSimAE for After
-Effects on Windows. Unlike the Nuke version, **FlareSimAE does not yet have a
-pre-built release zip**. You will need to compile the native effect yourself.
+This guide walks you through installing FlareSimAE for After Effects on
+Windows, either from a pre-built ZIP or by compiling the native effect.
 
-The current code is a developer preview. Compilation and automated tests have
-passed on the development system, but the most recent build has not undergone
-complete interactive testing in After Effects.
+The current release is a **developer preview**. Compilation and automated
+tests have passed on the development system, but the most recent build has
+not undergone complete interactive testing in After Effects.
+
+---
+
+## What's in the release zip
+
+Download the Windows CUDA ZIP matching your release version from
+[GitHub Releases](https://github.com/ken-eizo/flaresim_ae/releases).
+
+```text
+FlareLensAE.aex         (Windows After Effects effect)
+README.md
+INSTALL.md
+LICENSE.txt
+LICENSE_UPSTREAM.txt
+NOTICE.md
+FlareLensCatalog.tsv   (embedded catalog reference index)
+lenses/
+    lens_files/        (original prescriptions; optional reference data)
+    convert_ob.py
+    convert_p2p.py
+```
+
+**Only `FlareLensAE.aex` needs to be installed in After Effects.** The 1,370
+original prescriptions are also compiled into the AEX; the included lens
+files and conversion scripts are reference material, not sidecars required
+by the plug-in.
+
+No macOS, Linux, or CPU-only ZIP is available for this release.
 
 ---
 
@@ -125,7 +152,10 @@ testing the compiled effect inside After Effects.
 
 ## Install the plug-in
 
-**1.** Close After Effects before replacing an installed plug-in.
+**1.** Download the ZIP from
+[Releases](https://github.com/ken-eizo/flaresim_ae/releases) and extract it,
+or compile from source using the instructions above. Close After Effects
+before replacing an installed plug-in.
 
 **2.** Copy the compiled `FlareLensAE.aex` manually into the `Plug-ins`
 directory of your After Effects installation, for example:
