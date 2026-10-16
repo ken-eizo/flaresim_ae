@@ -29,7 +29,8 @@ struct Trace {
  uint32_t offset,count;
  float sensor_z,front_radius,start_z,half_w,half_h,gain,ray_weight;
 };
-struct Image {uint32_t w,h,src_pitch,dst_pitch,mode;float gain;};
+struct MetalImageParams {uint32_t w,h,src_pitch,dst_pitch,mode;float gain;};
+struct PixelFloat4 {float x,y,z,w;};
 struct Blur {uint32_t w,h,radius;};
 struct Haze {uint32_t w,h,pitch,count;float gain;};
 struct Detect {uint32_t w,h,pitch,step,dw,dh;float threshold,cap;uint32_t gate;};
@@ -216,7 +217,7 @@ bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
  [blit copyFromBuffer:gpu sourceOffset:0 toBuffer:readback destinationOffset:0 size:bytes];
  [blit endEncoding];
  if(!finish(cmd))return false;
- const auto* blocks=static_cast<const simd_float4*>(readback.contents);
+ const auto* blocks=static_cast<const PixelFloat4*>(readback.contents);
  const int max_sources=std::clamp(s.max_sources,1,2048);
  const int limit=s.cluster_radius>0?std::min(8192,max_sources*4):max_sources;
  std::priority_queue<Candidate,std::vector<Candidate>,Better> best;
@@ -299,7 +300,7 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
  }
  auto light_gpu=upload(dev,lights.data(),lights.size()*sizeof(Light));
  if(!lights.empty()&&!light_gpu)return false;
- Image image{uint32_t(w),uint32_t(h),uint32_t(v.input_pitch_bytes/16),
+ MetalImageParams image{uint32_t(w),uint32_t(h),uint32_t(v.input_pitch_bytes/16),
              uint32_t(v.output_pitch_bytes/16),uint32_t(v.output_mode),1.f};
  id<MTLCommandBuffer> cmd=[queue commandBuffer];
  if(v.output_mode==3){
