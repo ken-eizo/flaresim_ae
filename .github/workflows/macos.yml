@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           cmake --build build-macos-ae --target FlareLensMetalGpuTest --parallel 3
-          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure
+          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure --verbose
       - name: Check native bundle and architectures
         shell: bash
         run: |
@@ -97,7 +97,11 @@ jobs:
           [[ " $archs " == *" x86_64 "* ]] || { echo "::error::Missing x86_64 slice"; exit 1; }
           find "$plugin/Contents/Resources" -type f -name '*.rsrc' -print -quit | grep .
           test -s "$plugin/Contents/Resources/FlareLensMetal.metallib"
+          # Rez may attach a resource fork to the bundle. Remove only Finder
+          # metadata/extended attributes before ad-hoc signing; keep .rsrc.
+          xattr -cr "$plugin"
           codesign --force --deep --sign - "$plugin"
+          codesign --verify --deep --strict --verbose=2 "$plugin"
           ditto -c -k --keepParent "$plugin" "$RUNNER_TEMP/FlareSimAE_macOS_Metal_unverified.zip"
           echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_macOS_Metal_unverified.zip" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
