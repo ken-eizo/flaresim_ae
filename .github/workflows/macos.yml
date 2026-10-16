@@ -102,8 +102,13 @@ jobs:
           xattr -cr "$plugin"
           codesign --force --deep --sign - "$plugin"
           codesign --verify --deep --strict --verbose=2 "$plugin"
-          ditto -c -k --keepParent "$plugin" "$RUNNER_TEMP/FlareSimAE_macOS_Metal_unverified.zip"
-          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_macOS_Metal_unverified.zip" >> "$GITHUB_ENV"
+          staging="$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS"
+          mkdir -p "$staging"
+          ditto "$plugin" "$staging/FlareSimAE.plugin"
+          cp README.md INSTALL.md NOTICE.md LICENSE "$staging/"
+          cp upstream/LICENSE "$staging/LICENSE_UPSTREAM.txt"
+          ditto -c -k --keepParent "$staging" "$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS.zip"
+          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS.zip" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
           name: FlareSimAE-macOS-Metal-unverified

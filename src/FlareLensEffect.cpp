@@ -1193,7 +1193,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
   switch(cmd){
    case PF_Cmd_ABOUT:
     std::snprintf(out->return_msg,sizeof(out->return_msg),
-      "FlareSimAE 1.0.2 / native CUDA tiled SmartFX and source preview");
+      "FlareSimAE 1.0.3 / native CUDA/Metal SmartFX optical rendering");
     return PF_Err_NONE;
    case PF_Cmd_GLOBAL_SETUP:
     out->my_version=kVersion;

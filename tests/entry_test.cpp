@@ -20,7 +20,7 @@ int main(){
  if(f(PF_Cmd_GLOBAL_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE)return 5;
  PF_OutData about{};
  if(f(PF_Cmd_ABOUT,&in,&about,nullptr,nullptr,nullptr)!=PF_Err_NONE||
-    std::strstr(about.return_msg,"1.0.2")==nullptr){
+    std::strstr(about.return_msg,"1.0.3")==nullptr){
   std::cerr<<"Build revision unavailable via AE About selector\n";
   return 14;
  }

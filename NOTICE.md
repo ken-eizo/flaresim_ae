@@ -6,7 +6,7 @@ FlareSimAE is derived from the open-source [flaresim_nuke](https://github.com/Lo
 
 Original copyright notices and the full **MIT license** are preserved in [upstream/LICENSE](upstream/LICENSE). Original source, data and provenance are separated in [upstream/](upstream/).
 
-Modifications for Adobe After Effects (SmartFX host adapter, custom lens controls, catalog embedding, CPU/CUDA postprocessing, tests and other changes) are not represented as unmodified copies of the upstream project. The AE adaptation is unofficial; it has no claim of endorsement or support by the upstream creators or Adobe.
+Modifications for Adobe After Effects (SmartFX host adapter, custom lens controls, catalog embedding, CPU/CUDA/Metal postprocessing, tests and other changes) are not represented as unmodified copies of the upstream project. The AE adaptation is unofficial; it has no claim of endorsement or support by the upstream creators or Adobe.
 
 ## Adobe After Effects SDK
 
