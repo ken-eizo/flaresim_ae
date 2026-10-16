@@ -33,38 +33,46 @@ jobs:
 
   ae-plugin:
     name: macOS native AE plugin (CPU)
-    # SDK must be provisioned privately: GitHub-hosted macOS cannot access
-    # the Windows PC E: drive. Never vendor proprietary Adobe SDK files.
-    if: ${{ vars.FLARESIM_MAC_SDK_READY == 'true' }}
+    # SDK is restored from encrypted Actions secrets; no proprietary SDK
+    # content is committed or published in CI artifacts.
     runs-on: macos-15
     timeout-minutes: 50
     env:
-      AE_SDK_MAC_URL: ${{ secrets.AE_SDK_MAC_URL }}
-      AE_SDK_MAC_SHA256: 'e02fa2b488c3cceb238866b648eb9a2526d308a260744367915a2f173663c36c'
+      AE_SDK_CHUNK_00: ${{ secrets.AE_SDK_MAC_00 }}
+      AE_SDK_CHUNK_01: ${{ secrets.AE_SDK_MAC_01 }}
+      AE_SDK_CHUNK_02: ${{ secrets.AE_SDK_MAC_02 }}
+      AE_SDK_CHUNK_03: ${{ secrets.AE_SDK_MAC_03 }}
+      AE_SDK_CHUNK_04: ${{ secrets.AE_SDK_MAC_04 }}
+      AE_SDK_CHUNK_05: ${{ secrets.AE_SDK_MAC_05 }}
+      AE_SDK_CHUNK_06: ${{ secrets.AE_SDK_MAC_06 }}
+      AE_SDK_CHUNK_07: ${{ secrets.AE_SDK_MAC_07 }}
+      AE_SDK_CHUNK_08: ${{ secrets.AE_SDK_MAC_08 }}
+      AE_SDK_CHUNK_09: ${{ secrets.AE_SDK_MAC_09 }}
+      AE_SDK_CHUNK_10: ${{ secrets.AE_SDK_MAC_10 }}
+      AE_SDK_CHUNK_11: ${{ secrets.AE_SDK_MAC_11 }}
+      AE_SDK_CHUNK_12: ${{ secrets.AE_SDK_MAC_12 }}
+      AE_SDK_CHUNK_13: ${{ secrets.AE_SDK_MAC_13 }}
+      AE_SDK_CHUNK_14: ${{ secrets.AE_SDK_MAC_14 }}
+      AE_SDK_CHUNK_15: ${{ secrets.AE_SDK_MAC_15 }}
+      AE_SDK_CHUNK_16: ${{ secrets.AE_SDK_MAC_16 }}
+      AE_SDK_CHUNK_17: ${{ secrets.AE_SDK_MAC_17 }}
+      AE_SDK_CHUNK_18: ${{ secrets.AE_SDK_MAC_18 }}
+      AE_SDK_CHUNK_19: ${{ secrets.AE_SDK_MAC_19 }}
+      AE_SDK_CHUNK_20: ${{ secrets.AE_SDK_MAC_20 }}
+      AE_SDK_CHUNK_21: ${{ secrets.AE_SDK_MAC_21 }}
+      AE_SDK_CHUNK_22: ${{ secrets.AE_SDK_MAC_22 }}
+      AE_SDK_CHUNK_23: ${{ secrets.AE_SDK_MAC_23 }}
+      AE_SDK_MANIFEST: ${{ secrets.AE_SDK_MAC_MANIFEST }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check SDK provisioning
-        shell: bash
-        run: |
-          test -n "$AE_SDK_MAC_URL" || { echo "::error::Set AE_SDK_MAC_URL to a private HTTPS download for the locally provided Mac SDK archive."; exit 1; }
-      - name: Install trusted Zstandard decoder
-        run: brew install zstd
-      - name: Download and verify separately supplied SDK
+      - name: Restore private Adobe SDK (encrypted Actions secrets)
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 --silent --show-error --proto '=https' --tlsv1.2 "$AE_SDK_MAC_URL" -o "$RUNNER_TEMP/ae-mac-sdk.tar.zstd"
-          actual="$(shasum -a 256 "$RUNNER_TEMP/ae-mac-sdk.tar.zstd" | cut -d ' ' -f1)"
-          test "$actual" = "$AE_SDK_MAC_SHA256" || { echo "::error::SDK SHA-256 mismatch"; exit 1; }
-          mkdir -p "$RUNNER_TEMP/ae-sdk"
-          # The user's file ends in .tar.zstd.zip but has a real Zstandard
-          # magic header 28 B5 2F FD (not a ZIP container).
-          zstd -d -c "$RUNNER_TEMP/ae-mac-sdk.tar.zstd" | tar -xf - -C "$RUNNER_TEMP/ae-sdk"
-          root="$(find "$RUNNER_TEMP/ae-sdk" -type f -path '*/Headers/AE_Effect.h' -print -quit)"
-          test -n "$root" || { echo "::error::Mac SDK Headers/AE_Effect.h not found"; exit 1; }
-          examples="$(dirname "$(dirname "$root")")"
-          test -f "$examples/Util/AEFX_SuiteHelper.c" || { echo "::error::AEFX_SuiteHelper.c missing"; exit 1; }
-          echo "AE_SDK_ROOT=$examples" >> "$GITHUB_ENV"
+          python3 scripts/actions_sdk_private.py restore --destination "$RUNNER_TEMP/private-sdk"
+          test -f "$RUNNER_TEMP/private-sdk/Examples/Headers/AE_Effect.h"
+          test -f "$RUNNER_TEMP/private-sdk/Examples/Util/AEFX_SuiteHelper.c"
+          echo "AE_SDK_ROOT=$RUNNER_TEMP/private-sdk/Examples" >> "$GITHUB_ENV"
       - name: Configure universal macOS AE effect
         run: |
           cmake -S . -B build-macos-ae -G Ninja -DCMAKE_BUILD_TYPE=Release             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0             -DAE_SDK_ROOT="$AE_SDK_ROOT"             -DFLARELENS_BUILD_AE=ON -DFLARELENS_ENABLE_CUDA=OFF
