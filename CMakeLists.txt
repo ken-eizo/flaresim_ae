@@ -92,7 +92,14 @@ message(STATUS "Embedding ${FLARE_LENS_COUNT} original Nuke lens prescriptions")
 
 # Cross-platform binary catalog parity: the macOS embedded byte table must
 # match each original Windows RCDATA .lens file byte-for-byte.
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
+if(APPLE)
+ find_package(Python3 COMPONENTS Interpreter REQUIRED)
+else()
+ # Python is optional for normal Windows builds; it only enables an extra
+ # cross-platform lens-catalog integrity test.
+ find_package(Python3 COMPONENTS Interpreter QUIET)
+endif()
+if(Python3_Interpreter_FOUND)
 set(FLARE_MAC_EMBED_CPP "${FLARE_GEN_DIR}/FlareLensEmbeddedMac.cpp")
 add_custom_command(OUTPUT "${FLARE_MAC_EMBED_CPP}"
  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_lenses_mac.py"
@@ -110,6 +117,7 @@ target_compile_definitions(FlareLensMacCatalogEmbeddingTest PRIVATE
  FLARELENS_TEST_SOURCE_DIR="${FLARE_LENS_ROOT}")
 add_test(NAME FlareLensMacCatalogEmbeddingTest
  COMMAND FlareLensMacCatalogEmbeddingTest)
+endif()
 
 option(FLARELENS_BUILD_AE "Build AE effect" ON)
 option(FLARELENS_ENABLE_CUDA "Native AE host-managed CUDA render" ON)

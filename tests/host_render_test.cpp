@@ -347,8 +347,14 @@ static int validate_requested_rect_contract(Main effect,PF_InData& in){
              <<result.result_rect.right<<","<<result.result_rect.bottom<<")\n";
     return 110+int(i);
   }
+  // CUDA eligibility requires full-sensor input for proper sensor geometry
+  // even if AE requests a sub-rectangle. Non-CUDA diagnostics keep ROI.
+#ifdef FLARELENS_HAVE_CUDA
+  if(!same(g_last_input_request,full))return 120+int(i);
+#else
   if(!t.detect&&!same(g_last_input_request,t.expected))return 120+int(i);
   if(t.detect&&!same(g_last_input_request,full))return 130+int(i);
+#endif
   if(result.delete_pre_render_data_func)
    result.delete_pre_render_data_func(result.pre_render_data);
  }
@@ -370,7 +376,7 @@ static int validate_host_gpu_dispatch(Main effect,PF_InData& in){
  in.inter.checkin_param=&checkin_params;
  PF_PreRenderCallbacks cb{};
  cb.checkout_layer=&checkout_pre_input;
- const int gpu_modes[]={1,2,4,5};
+ const int gpu_modes[]={1,2,3,4,5};
  for(const int mode:gpu_modes){
   g_params[10].u.pd.value=mode;
   g_params[5].u.bd.value=FALSE;
@@ -390,7 +396,7 @@ static int validate_host_gpu_dispatch(Main effect,PF_InData& in){
    return 70+mode;
   }
  }
- for(const int mode:{3,6,7,8}){
+ for(const int mode:{6,7,8}){
   g_params[10].u.pd.value=mode;
   PF_PreRenderInput req{};
   req.what_gpu=PF_GPU_Framework_CUDA;
@@ -426,8 +432,8 @@ static int validate_host_gpu_dispatch(Main effect,PF_InData& in){
     (adaptive_out.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE)==0||
     adaptive_out.max_result_rect.right!=width||
     adaptive_out.max_result_rect.bottom!=height)return 91;
- // A partially checked-out frame must fall back rather than pretending a
- // 960x540 tile is the complete Nuke optical sensor.
+ // The full optical sensor is computed in CUDA even when AE requests an
+ // ROI tile, with a full-frame input checkout and correct output crop.
  in.width=width;in.height=height;
  in.downsample_x.num=1;in.downsample_x.den=1;
  in.downsample_y.num=1;in.downsample_y.den=1;
@@ -441,8 +447,24 @@ static int validate_host_gpu_dispatch(Main effect,PF_InData& in){
  const auto err=effect(PF_Cmd_SMART_PRE_RENDER,&in,&result,nullptr,nullptr,&extra);
  if(output.delete_pre_render_data_func)
   output.delete_pre_render_data_func(output.pre_render_data);
- if(err||(output.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE))return 90;
- std::cout<<"REAL_AEX_CUDA_PRE_RENDER_DISPATCH_VALIDATED modes=1,2,4,5\n";
+ if(err||(output.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE)==0||
+    g_last_input_request.left!=0||g_last_input_request.top!=0||
+    g_last_input_request.right!=width||g_last_input_request.bottom!=height)
+    return 90;
+ // A request entirely outside the optical sensor must not advertise CUDA.
+ PF_PreRenderInput outside{};
+ outside.what_gpu=PF_GPU_Framework_CUDA;
+ outside.output_request.rect={width+8,height+8,width+32,height+32};
+ PF_PreRenderOutput outside_out{};
+ PF_PreRenderExtra outside_extra{&outside,&outside_out,&cb};
+ PF_OutData outside_data{};
+ const auto outside_err=effect(PF_Cmd_SMART_PRE_RENDER,&in,
+   &outside_data,nullptr,nullptr,&outside_extra);
+ if(outside_out.delete_pre_render_data_func)
+  outside_out.delete_pre_render_data_func(outside_out.pre_render_data);
+ if(outside_err||(outside_out.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE))
+  return 92;
+ std::cout<<"REAL_AEX_CUDA_PRE_RENDER_DISPATCH_VALIDATED modes=1,2,3,4,5 plus_manual_ROI\n";
  return 0;
 }
 #endif
@@ -489,7 +511,7 @@ int main(){
  if(!trace)return 56;
  const std::string records((std::istreambuf_iterator<char>(trace)),
                             std::istreambuf_iterator<char>());
- if(records.find("version=1.0.0")==std::string::npos||
+ if(records.find("version=1.0.1")==std::string::npos||
     records.find("CPU_BEGIN")==std::string::npos||
     records.find("CPU_GHOST")==std::string::npos||
     records.find("PRE_RENDER")==std::string::npos)return 57;

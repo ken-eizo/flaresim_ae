@@ -13,8 +13,15 @@ int main(){
  for(int i=0;i<fl::catalog::kCount;i++){
   const auto entry=fl::catalog::embedded::get(i);
   if(!entry.data||!entry.size)return 1;
+  // Windows needs UTF-8 conversion for native filename lookup. POSIX paths
+  // already use UTF-8 bytes, without deprecated std::filesystem::u8path.
+#if defined(_WIN32)
   const auto path=fs::path(FLARELENS_TEST_SOURCE_DIR) /
       fs::u8path(fl::catalog::kNames[size_t(i)]);
+#else
+  const auto path=fs::path(FLARELENS_TEST_SOURCE_DIR) /
+      fs::path(fl::catalog::kNames[size_t(i)]);
+#endif
   std::ifstream stream(path,std::ios::binary);
   if(!stream){std::cerr<<"Cannot read "<<i<<"\n";return 2;}
   const std::string expected((std::istreambuf_iterator<char>(stream)),

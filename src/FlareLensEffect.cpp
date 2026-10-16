@@ -56,7 +56,7 @@ enum { P_INPUT=0,P_LIGHT,P_GAIN,P_GRID,P_FOV,P_THRESHOLD,P_AUTO,P_MAXSOURCES,
        P_MANUAL_RADIANCE,P_HOST_TRACE,P_ADAPTIVE_PREVIEW,P_MANUAL_DIAMETER,
        P_LENS_SOURCE,P_CATALOG_INDEX,P_CATALOG_BROWSE,
        P_CUSTOM_LENS,P_CUSTOM_CLONE,P_COUNT };
-constexpr auto kVersion=PF_VERSION(1,0,0,PF_Stage_RELEASE,0);
+constexpr auto kVersion=PF_VERSION(1,0,1,PF_Stage_RELEASE,0);
 constexpr A_long kInputCheckout=1;
 
 struct RGB {float r=0,g=0,b=0,a=0;};
@@ -769,10 +769,20 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  visible.top=std::max(full.top,wanted.top);
  visible.right=std::max(visible.left,std::min(full.right,wanted.right));
  visible.bottom=std::max(visible.top,std::min(full.bottom,wanted.bottom));
- // Bright-source detection needs all the input pixels. For a manual
- // emitter the input is only used as a compositing plate and may be
- // checked out at the requested ROI, avoiding unnecessary full-frame I/O.
+ // CUDA always evaluates a complete optical sensor, even for a tiny AE
+ // requested tile. The composited input plate must therefore be checked out
+ // at full-sensor resolution. Otherwise AE silently chooses the costly CPU
+ // path for ordinary manual-light ROI requests.
+ // CPU rendering still checks out only its actual ROI for manual lights.
+#ifdef FLARELENS_HAVE_CUDA
+ const bool cuda_input_eligible=extra->input->what_gpu==PF_GPU_Framework_CUDA&&
+   (args.output_mode==1||args.output_mode==2||
+    args.output_mode==3||args.output_mode==4||
+    args.output_mode==5)&&args.star_gain<=0;
+ request.rect=(args.auto_detect||cuda_input_eligible)?full:visible;
+#else
  request.rect=args.auto_detect?full:visible;
+#endif
  request.channel_mask=PF_ChannelMask_ARGB;
  PF_CheckoutResult input_result{};
  err=extra->cb->checkout_layer(in->effect_ref,P_INPUT,kInputCheckout,&request,
@@ -788,11 +798,10 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  extra->output->max_result_rect=full;
  // Do not set RETURNS_EXTRA_PIXELS: we are not returning a larger output
  // than AE requested, even though the optical calculation is full-frame.
- // Advertise CUDA only for full-frame, native-resolution manually emitted
- // light with no diffraction pass. This avoids producing a *different*
- // optical sensor on partially checked-out AE render tiles.
- // The CPU path remains authoritative for extracted sources, starburst and
- // arbitrary ROI / downsample requests. CPU fallback is an AE host decision.
+ // Advertise CUDA for an in-frame ROI as well as full sensor requests:
+ // the GPU optical renderer computes the FULL sensor and crops to the
+ // requested AE tile, preserving physical source/sensor coordinates.
+ // CPU remains the explicit fallback when the host provides no CUDA.
 #ifdef FLARELENS_HAVE_CUDA
  const auto& output_rect=extra->input->output_request.rect;
  const bool valid_scale=in->downsample_x.num>0&&in->downsample_x.den>0&&
@@ -802,7 +811,8 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  const bool full_rect=output_rect.left==0&&output_rect.top==0&&
    output_rect.right==full.right&&output_rect.bottom==full.bottom;
  const bool gpu_output=args.output_mode==1||args.output_mode==2||
-                       args.output_mode==4||args.output_mode==5;
+                       args.output_mode==3||args.output_mode==4||
+                       args.output_mode==5;
  const bool scaled_preview=args.adaptive_preview&&
   ((in->downsample_x.num>0&&in->downsample_x.num<in->downsample_x.den)||
    (in->downsample_y.num>0&&in->downsample_y.num<in->downsample_y.den));
@@ -818,7 +828,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  // Auto-detected rays influence pixels outside the source region. Render
  // the full optical field on-device, then crop to the host's requested ROI.
  // No false dependency region or CPU optical fallback for AE tiled requests.
- const bool gpu_geometry=full_rect||(args.auto_detect&&in_frame_roi);
+ const bool gpu_geometry=in_frame_roi;
  const bool can_gpu=extra->input->what_gpu==PF_GPU_Framework_CUDA&&
    detectable&&gpu_output&&args.star_gain<=0&&
    valid_scale&&gpu_geometry&&full.right>0&&full.bottom>0&&
@@ -861,7 +871,8 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
  const auto& args=*static_cast<const FrameArgs*>(extra->input->pre_render_data);
  fl::host_trace(args.host_trace,"GPU_ENTER","host GPU selector requested");
  const bool supported_mode=args.output_mode==1||args.output_mode==2||
-                           args.output_mode==4||args.output_mode==5;
+                           args.output_mode==3||args.output_mode==4||
+                           args.output_mode==5;
  if(!supported_mode||args.star_gain>0)
   return PF_Err_BAD_CALLBACK_PARAM;
  PF_EffectWorld* input=nullptr;
@@ -901,7 +912,10 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
                    output->origin_x!=0||output->origin_y!=0;
   if(!geometry.valid()||full_w<1||full_h<1||full_w>16384||full_h>16384)
     err=PF_Err_BAD_CALLBACK_PARAM;
-  if(!err&&tiled&&(!args.auto_detect||output->origin_x<0||
+  // A host-requested manual-source tile is valid on CUDA: pre_render has
+  // checked out the COMPLETE input sensor. The GPU produces full-sensor
+  // ghosts and then copies only the requested rectangular output.
+  if(!err&&tiled&&(output->origin_x<0||
      output->origin_y<0||output->origin_x+output->width>full_w||
      output->origin_y+output->height>full_h))err=PF_Err_BAD_CALLBACK_PARAM;
   if(!err)err=gs->GetGPUWorldData(in->effect_ref,output,&dst);
@@ -1100,7 +1114,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
   switch(cmd){
    case PF_Cmd_ABOUT:
     std::snprintf(out->return_msg,sizeof(out->return_msg),
-      "FlareSimAE 1.0.0 / compact monochrome lens controls");
+      "FlareSimAE 1.0.1 / native CUDA tiled SmartFX and source preview");
     return PF_Err_NONE;
    case PF_Cmd_GLOBAL_SETUP:
     out->my_version=kVersion;

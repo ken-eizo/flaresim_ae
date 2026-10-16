@@ -129,7 +129,7 @@ components through **Output Mode**.
 |-------------|----------|
 | **Composite** | Input image combined with the enabled flare components |
 | **Flare Only** | Flare contribution without the original image |
-| **Sources Preview** | Markers at detected or manual light positions; skips optical ghost tracing |
+| **Sources Preview** | CUDA-accelerated markers at detected or manual light positions; skips optical ghost tracing |
 | **Ghost Only** | Lens-reflection ghosts |
 | **Haze Only** | Veiling haze |
 | **Starburst Only** | Aperture diffraction pattern |
@@ -137,7 +137,7 @@ components through **Output Mode**.
 | **Optical Diagnostics** | Diagnostic rendering for troubleshooting |
 
 These are selectable outputs of the same effect, **not** additional Nuke-style
-named image channels. Some diagnostic and starburst modes use the CPU path
+named image channels. Starburst and optical diagnostic modes still use the CPU path
 rather than the CUDA render path.
 
 ---
@@ -401,6 +401,12 @@ that result does **not** establish full validation in After Effects.
 ---
 
 ## Performance tips
+
+**Windows v1.0.1 GPU dispatch fix:** the host can now select CUDA for
+in-frame manual-light tiles, and Sources Preview has its own CUDA
+rendering path. See the [v1.0.1 Windows CUDA regression audit](docs/WINDOWS_GPU_FIX_1.0.1.md).
+Diffraction/starburst and optical diagnostics still require CPU rendering;
+macOS Metal acceleration remains unimplemented.
 
 - **Ray Grid** is a major render-time lever. Increasing it from 64 to
   512 multiplies pupil samples by 64.

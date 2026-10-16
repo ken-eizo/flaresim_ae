@@ -521,6 +521,37 @@ __global__ void flarelens_spectral_kernel(
   }
  }
 }
+// Source Preview needs no optical trace: dim RGB in one GPU pass and
+// atomically paint up to 121 pixels per detected source. Its per-source
+// cost is constant, independent of the Ray Grid and ghost pair count.
+__global__ void flarelens_sources_preview_base(
+ const float4* input,int input_pitch,float4* output,int output_pitch,
+ int width,int height){
+ const int i=int(blockIdx.x)*256+int(threadIdx.x);
+ if(i>=width*height)return;
+ const int x=i%width,y=i/width;
+ const float4 in=input?input[size_t(y)*input_pitch+x]:make_float4(0,0,0,0);
+ output[size_t(y)*output_pitch+x]=
+   make_float4(in.x*.12f,in.y*.12f,in.z*.12f,1.f);
+}
+__global__ void flarelens_sources_preview_mark(
+ const float4* input,int input_pitch,float4* output,int output_pitch,
+ int width,int height,const int2* markers,int count){
+ const int s=int(blockIdx.x),t=int(threadIdx.x);
+ if(s>=count||t>=121)return;
+ const int dx=t%11-5,dy=t/11-5;
+ const int r2=dx*dx+dy*dy;
+ if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
+      (dy==0&&r2<=25)))return;
+ const int x=markers[s].x+dx,y=markers[s].y+dy;
+ if(x<0||y<0||x>=width||y>=height)return;
+ const float4 in=input?input[size_t(y)*input_pitch+x]:make_float4(0,0,0,0);
+ float4* dst=output+size_t(y)*output_pitch+x;
+ // Duplicate marks write the exact same value, safely via atomics.
+ atomicExch(&dst->x,in.x*.12f+1.f);
+ atomicExch(&dst->y,in.y*.12f+1.f);
+ atomicExch(&dst->z,in.z*.12f+1.f);
+}
 // Two full-resolution scratch surfaces hold only RGB photon energy (BGRA128).
 // The optical ray kernel above is unchanged. All post-processing remains on
 // the host-owned CUDA stream; no GPU->CPU readback of pixels is performed.
@@ -737,7 +768,9 @@ size_t scratch_bytes(const LensSystem& lens,int sources,int grid,int w,int h,
                      int output_mode,bool need_blur,bool dense_haze,bool analytic_haze) noexcept {
  if(sources<1||sources>2048||grid<2||grid>2048||w<1||h<1||
     w>16384||h>16384||lens.surfaces.size()<2||lens.surfaces.size()>64||
-    (output_mode!=1&&output_mode!=2&&output_mode!=4&&output_mode!=5))return 0;
+    (output_mode!=1&&output_mode!=2&&output_mode!=3&&
+     output_mode!=4&&output_mode!=5))return 0;
+ if(output_mode==3)return align16(size_t(sources)*sizeof(int2));
  const size_t pairs=std::min<size_t>(2048,lens.surfaces.size()*lens.surfaces.size());
  const size_t npx=size_t(w)*size_t(h);
  if(npx>size_t(16384)*16384)return 0;
@@ -765,7 +798,8 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
     v.output_pitch_bytes<v.width*16||
     (v.output_mode==1&&(v.input_pitch_bytes%16)!=0)||
     (v.output_pitch_bytes%16)!=0||
-    (v.output_mode!=1&&v.output_mode!=2&&v.output_mode!=4&&v.output_mode!=5))
+    (v.output_mode!=1&&v.output_mode!=2&&v.output_mode!=3&&
+     v.output_mode!=4&&v.output_mode!=5))
     return false;
  const int w=v.width,h=v.height;
  const size_t npx=size_t(w)*h;
@@ -777,6 +811,32 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  // On every early exit drain already queued commands before CPU upload
  // vectors are destroyed or AE device scratch is released.
  SyncOnExit sync{stream,true};
+ if(v.output_mode==3){
+  const dim3 block(256),grid((unsigned(npx)+255)/256);
+  flarelens_sources_preview_base<<<grid,block,0,stream>>>(
+   static_cast<const float4*>(v.input),v.input_pitch_bytes/16,
+   static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h);
+  if(cudaPeekAtLastError()!=cudaSuccess)return false;
+  sync.pending=true;
+  if(!sources.empty()){
+   if(!scratch||scratch_size<align16(sources.size()*sizeof(int2)))
+    return false;
+   std::vector<int2> marker_positions;
+   marker_positions.reserve(sources.size());
+   for(const auto& source:sources)
+    marker_positions.push_back(make_int2(
+       int(floorf(source.x*w)),int(floorf(source.y*h))));
+   if(cudaMemcpyAsync(scratch,marker_positions.data(),
+      marker_positions.size()*sizeof(int2),cudaMemcpyHostToDevice,stream)
+      !=cudaSuccess)return false;
+   flarelens_sources_preview_mark<<<unsigned(sources.size()),128,0,stream>>>(
+     static_cast<const float4*>(v.input),v.input_pitch_bytes/16,
+     static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h,
+     static_cast<const int2*>(scratch),int(sources.size()));
+   if(cudaPeekAtLastError()!=cudaSuccess)return false;
+  }
+  return sync.finish();
+ }
  if(v.output_mode==1){
   if(cudaMemcpy2DAsync(v.output,v.output_pitch_bytes,v.input,v.input_pitch_bytes,
       size_t(w)*16,h,cudaMemcpyDeviceToDevice,stream)!=cudaSuccess)return false;
@@ -819,7 +879,10 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
   if((settings.pair_mode==1&&!selected)||(settings.pair_mode==2&&selected))continue;
   pairs.push_back({active[i].surf_a,active[i].surf_b,boosts[i]});
  }
- const auto pupil=fl::make_pupil(settings);
+ // Borrow the immutable MFR-safe pupil instead of copying up to 2 MiB
+ // from the cache on every CUDA frame. Source samples stay byte-identical.
+ const auto pupil_storage=fl::cached_pupil(settings);
+ const auto& pupil=*pupil_storage;
  const auto spectrum=fl::make_spectrum(settings);
  std::vector<GPUSource> lights;
  lights.reserve(sources.size());

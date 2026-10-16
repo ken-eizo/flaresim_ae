@@ -240,12 +240,33 @@ static int one_render(Main effect,PF_InData& in,int mode,
   fl::Source{float(block_x+2)/width,float(block_y+2)/height,100,80,60}:
   fl::Source{sx,sy,30000,30000,30000}};
  std::vector<float> expected(n*3,0);
- if(mode!=5&&many==0){
+ if(mode!=5&&mode!=3&&many==0){
   expected=fl::render_cpu(lens,lights,settings,width,height).rgb;
   if(expected.size()!=n*3)return 26;
   if(mode!=2){
    const int radius=int(std::round(.003f*std::hypot(float(width),float(height))));
    fl::box_blur_rgb(expected,width,height,radius,3);
+  }
+ }
+ if(mode==3){
+  // CPU Sources Preview uses the input RGB at 12% and an opaque cross.
+  // Check both manually placed emitters and HDR GPU auto detection.
+  if(detect){
+   for(size_t i=0;i<n;i++){
+    expected[i*3]=image_cpu[i].z*.12f;
+    expected[i*3+1]=image_cpu[i].y*.12f;
+    expected[i*3+2]=image_cpu[i].x*.12f;
+   }
+  }
+  const int cx=detect?block_x+2:int(std::floor(sx*width));
+  const int cy=detect?block_y+2:int(std::floor(sy*height));
+  for(int dy=-5;dy<=5;dy++)for(int dx=-5;dx<=5;dx++){
+   const int x=cx+dx,y=cy+dy,r2=dx*dx+dy*dy;
+   if(x<0||x>=width||y<0||y>=height)continue;
+   if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
+        (dy==0&&r2<=25)))continue;
+   const auto i=(size_t(y)*width+x)*3;
+   expected[i]+=1.f;expected[i+1]+=1.f;expected[i+2]+=1.f;
   }
  }
  if((mode==1||mode==5)&&many==0){
@@ -288,7 +309,10 @@ static int one_render(Main effect,PF_InData& in,int mode,
     (many>0&&elapsed>5000.))return 29;
  // Production AEX must request the tight scratch size, not the old
  // conservative 2-frame allocation used by standalone compatibility API.
- if(!detect&&(mode==2||mode==5)&&max_allocation>=size_t(width)*height*4){
+ // A tiled request intentionally allocates a full-sensor CUDA output
+ // before cropping; the old scratch-memory invariant applies to full frames.
+ if(!tile&&!detect&&(mode==2||mode==5)&&
+    max_allocation>=size_t(width)*height*4){
   std::cerr<<"AEX allocated unnecessary full-frame CUDA scratch mode="
            <<mode<<" bytes="<<max_allocation<<"\n";
   return 30;
@@ -338,14 +362,26 @@ int main(){
  PF_GPUDeviceSetupExtra setup_extra{&setup_input,&setup_output};
  if(effect(PF_Cmd_GPU_DEVICE_SETUP,&in,&out,nullptr,nullptr,&setup_extra)
     !=PF_Err_NONE)return 7;
- for(int mode:{1,2,4,5}){
+ for(int mode:{1,2,3,4,5}){
   const int err=one_render(effect,in,mode,640,360,lens);
   if(err)return err+100*mode;
  }
+ // Regression for first-application lag: a manual source must retain CUDA
+ // when the AE host asks for a tile instead of the whole composition.
+ for(int mode:{1,2,3,4,5}){
+  const int err=one_render(effect,in,mode,640,360,lens,
+                           false,false,true);
+  if(err)return 5000+100*mode+err;
+ }
+ std::cout<<"MANUAL_LIGHT_CUDA_TILED_ROI_CPU_REFERENCE_PARITY_PASSED\n";
  if(const int err=one_render(effect,in,1,640,360,lens,true))
   return 700+err;
  if(const int err=one_render(effect,in,2,640,360,lens,false,true))
   return 900+err;
+ if(const int err=one_render(effect,in,3,640,360,lens,false,true))
+  return 1000+err;
+ if(const int err=one_render(effect,in,3,640,360,lens,false,true,true))
+  return 1050+err;
  if(const int err=one_render(effect,in,2,640,360,lens,false,true,true))
   return 1100+err;
  if(const int err=one_render(effect,in,2,640,360,lens,false,true,false,512))
