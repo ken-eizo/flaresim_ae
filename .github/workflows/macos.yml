@@ -78,6 +78,11 @@ jobs:
           cmake -S . -B build-macos-ae -G Ninja -DCMAKE_BUILD_TYPE=Release             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0             -DAE_SDK_ROOT="$AE_SDK_ROOT"             -DFLARELENS_BUILD_AE=ON -DFLARELENS_ENABLE_CUDA=OFF
       - name: Compile Metal-enabled FlareSimAE.plugin
         run: cmake --build build-macos-ae --target FlareLensAE --parallel 3
+      - name: Run native Metal GPU physics and parity tests
+        shell: bash
+        run: |
+          cmake --build build-macos-ae --target FlareLensMetalGpuTest --parallel 3
+          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure
       - name: Check native bundle and architectures
         shell: bash
         run: |

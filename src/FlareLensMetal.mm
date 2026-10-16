@@ -52,6 +52,9 @@ id<MTLComputePipelineState> pipeline(id<MTLDevice> device,NSString* name){
  else {
   NSBundle* bundle=[NSBundle bundleForClass:[FlareSimMetalLocator class]];
   NSString* path=[bundle pathForResource:@"FlareLensMetal" ofType:@"metallib"];
+  // The standalone Metal GPU test loads the same CI-compiled metallib.
+  if(!path&&getenv("FLARELENS_METAL_LIBRARY"))
+    path=[NSString stringWithUTF8String:getenv("FLARELENS_METAL_LIBRARY")];
   if(!path)return nil;
   NSError* error=nil;
   library=[device newLibraryWithFile:path error:&error];

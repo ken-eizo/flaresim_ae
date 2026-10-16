@@ -68,3 +68,21 @@ add_custom_command(TARGET FlareLensAE POST_BUILD
   -o "$<TARGET_BUNDLE_CONTENT_DIR:FlareLensAE>/Resources/FlareSimAE.rsrc"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/FlareLensPiPL.r"
  VERBATIM COMMENT "Building macOS PiPL resource using Apple's Rez")
+
+# Hardware-backed Metal shader and optical parity test. Run on macOS CI;
+# universal compilation alone cannot prove the kernels actually execute.
+add_executable(FlareLensMetalGpuTest
+ tests/metal_gpu_test.mm src/FlareLensMetal.mm)
+target_include_directories(FlareLensMetalGpuTest PRIVATE
+ src upstream/src "${FLARE_GEN_DIR}")
+target_link_libraries(FlareLensMetalGpuTest PRIVATE
+ FlareLensCore "${FLARE_METAL}" "${FLARE_FOUNDATION}")
+target_compile_options(FlareLensMetalGpuTest PRIVATE
+ $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+target_compile_definitions(FlareLensMetalGpuTest PRIVATE
+ FLARELENS_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_dependencies(FlareLensMetalGpuTest FlareLensMetalShaders)
+add_test(NAME FlareLensMetalGpuTest COMMAND FlareLensMetalGpuTest)
+set_tests_properties(FlareLensMetalGpuTest PROPERTIES
+ ENVIRONMENT "FLARELENS_METAL_LIBRARY=${FLARE_METAL_LIBRARY}"
+ SKIP_RETURN_CODE 77)

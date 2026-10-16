@@ -16,6 +16,9 @@ physics=source[begin:end]
 physics=physics.replace("__device__ __forceinline__","inline")
 physics=physics.replace("const Surface*","device const Surface*")
 physics=physics.replace("const Surface&","device const Surface&")
+physics=physics.replace("const DRay&","thread const DRay&")
+physics=physics.replace("const DVec3&","thread const DVec3&")
+physics=re.sub(r"(?<!const )DVec3&","thread DVec3&",physics)
 for old,new in (("rsqrtf(","rsqrt("),("ldexpf(","ldexp("),
                 ("fabsf(","fabs("),("fminf(","fmin("),
                 ("fmaxf(","fmax("),("sqrtf(","sqrt("),
