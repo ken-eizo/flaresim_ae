@@ -56,7 +56,7 @@ enum { P_INPUT=0,P_LIGHT,P_GAIN,P_GRID,P_FOV,P_THRESHOLD,P_AUTO,P_MAXSOURCES,
        P_MANUAL_RADIANCE,P_HOST_TRACE,P_ADAPTIVE_PREVIEW,P_MANUAL_DIAMETER,
        P_LENS_SOURCE,P_CATALOG_INDEX,P_CATALOG_BROWSE,
        P_CUSTOM_LENS,P_CUSTOM_CLONE,P_COUNT };
-constexpr auto kVersion=PF_VERSION(1,0,1,PF_Stage_RELEASE,0);
+constexpr auto kVersion=PF_VERSION(1,0,2,PF_Stage_RELEASE,0);
 constexpr A_long kInputCheckout=1;
 
 struct RGB {float r=0,g=0,b=0,a=0;};
@@ -1138,7 +1138,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
   switch(cmd){
    case PF_Cmd_ABOUT:
     std::snprintf(out->return_msg,sizeof(out->return_msg),
-      "FlareSimAE 1.0.1 / native CUDA tiled SmartFX and source preview");
+      "FlareSimAE 1.0.2 / native CUDA tiled SmartFX and source preview");
     return PF_Err_NONE;
    case PF_Cmd_GLOBAL_SETUP:
     out->my_version=kVersion;

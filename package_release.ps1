@@ -2,7 +2,7 @@
 # FlareSim releases, adapted for After Effects on Windows.
 # The Adobe SDK and CUDA Toolkit are NOT copied into the package.
 param(
-    [string]$Version = 'v1.0.1',
+    [string]$Version = 'v1.0.2',
     [string]$BuildDir = (Join-Path $PSScriptRoot 'build'),
     [string]$OutputDir = (Join-Path $PSScriptRoot 'build')
 )
