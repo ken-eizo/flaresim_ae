@@ -18,7 +18,7 @@ add_custom_command(OUTPUT "${FLARE_METAL_PHYSICS}"
          "${CMAKE_CURRENT_SOURCE_DIR}/src/FlareLensGpu.cu"
  VERBATIM)
 add_custom_command(OUTPUT "${FLARE_METAL_AIR}"
- COMMAND "${FLARE_XCRUN}" -sdk macosx metal -std=metal2.3
+ COMMAND "${FLARE_XCRUN}" -sdk macosx metal
   -I "${FLARE_GEN_DIR}" -c
   "${CMAKE_CURRENT_SOURCE_DIR}/src/FlareLensMetalKernels.metal"
   -o "${FLARE_METAL_AIR}"
