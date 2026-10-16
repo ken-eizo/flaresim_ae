@@ -1,9 +1,12 @@
 #pragma once
 #include "FlareLensCore.hpp"
 #include <vector>
+#include <memory>
 namespace fl {
 struct PupilSample {float u=0,v=0;};
 struct SpectralSample {float lambda=550,r=0,g=0,b=0;};
+// Immutable shared samples: avoid copying up to 2 MiB per 512-grid CPU frame.
+std::shared_ptr<const std::vector<PupilSample>> cached_pupil(const Settings& s);
 std::vector<PupilSample> make_pupil(const Settings& s);
 std::vector<SpectralSample> make_spectrum(const Settings& s);
 void box_blur_rgb(std::vector<float>& rgb,int w,int h,int radius,int passes);

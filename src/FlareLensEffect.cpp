@@ -1,5 +1,9 @@
 #define NOMINMAX
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#define FLARELENS_MAC 1
+#endif
 #include <algorithm>
 #include <chrono>
 #include <array>
@@ -1089,7 +1093,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
 #endif
 } // namespace
 
-extern "C" __declspec(dllexport)
+extern "C" FLARELENS_EXPORT
 PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
                   PF_ParamDef* params[],PF_LayerDef* output,void* extra){
  try{
@@ -1134,7 +1138,13 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
      int chosen=params[P_CATALOG_INDEX]->u.sd.value;
      // Modal browser is opened ONLY by an explicit user click on the
      // native AE parameter button (never by rendering, MFR or startup).
-     if(fl::catalog::choose_embedded_lens(GetActiveWindow(),chosen,chosen)){
+     if(fl::catalog::choose_embedded_lens(
+#if defined(_WIN32)
+      GetActiveWindow(),
+#else
+      nullptr,
+#endif
+      chosen,chosen)){
       params[P_CATALOG_INDEX]->u.sd.value=chosen;
       params[P_CATALOG_INDEX]->uu.change_flags=PF_ChangeFlag_CHANGED_VALUE;
       params[P_LENS_SOURCE]->u.pd.value=1;

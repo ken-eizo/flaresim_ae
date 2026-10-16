@@ -40,6 +40,12 @@ int main(){
  const auto ultra=fl::make_pupil(s);
  if(ultra.size()<150000||ultra.size()>size_t(512)*512)return 6;
  if(!same(ultra,fl::make_pupil(s)))return 7;
+ // CPU renderer borrows one immutable pupil for all concurrent ray paths.
+ // No per-frame vector copy or lifetime dependence on cache eviction.
+ const auto immutable1=fl::cached_pupil(s);
+ const auto immutable2=fl::cached_pupil(s);
+ if(!immutable1||immutable1.get()!=immutable2.get()||
+    !same(ultra,*immutable1))return 11;
  // High-density disk sampling is deterministic, equal-area and keeps
  // every sample instead of discarding ~21.5% outside a square's circle.
  s.grid=768;s.pupil_jitter=3;s.aperture_blades=0;

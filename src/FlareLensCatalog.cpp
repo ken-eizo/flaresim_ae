@@ -1,6 +1,10 @@
 #define NOMINMAX
 #include "FlareLensCatalog.hpp"
+#if defined(_WIN32)
 #include <windows.h>
+#else
+#include "FlareLensEmbeddedMac.hpp"
+#endif
 #include <array>
 #include <mutex>
 #include <string>
@@ -32,6 +36,7 @@ struct CacheEntry {
  bool valid=false;
 };
 std::array<CacheEntry,kCount> cache{};
+#if defined(_WIN32)
 HMODULE self_module() noexcept{
  HMODULE module=nullptr;
  // Resolve resource from *this AEX*, never from the AE host executable.
@@ -41,6 +46,7 @@ HMODULE self_module() noexcept{
   reinterpret_cast<LPCSTR>(&self_module),&module);
  return ok?module:nullptr;
 }
+#endif
 bool valid_lens(const LensSystem& system){
  // Auxiliary converters can have focal_length: inf or an unspecified
  // focal length in the original Nuke asset. Keep the authentic data in
@@ -55,6 +61,7 @@ bool valid_lens(const LensSystem& system){
  return true;
 }
 void load_entry(int zero_based,CacheEntry& entry){
+#if defined(_WIN32)
  const HMODULE m=self_module();
  if(!m)return;
  const HRSRC resource=FindResourceW(m,
@@ -66,8 +73,15 @@ void load_entry(int zero_based,CacheEntry& entry){
  if(!data)return;
  const void* content=LockResource(data);
  if(!content)return;
+ const char* text=static_cast<const char*>(content);
+#else
+ const auto embedded=embedded::get(zero_based);
+ if(!embedded.data||!embedded.size)return;
+ const char* text=embedded.data;
+ const auto length=embedded.size;
+#endif
  LensSystem parsed{};
- if(!parsed.load_from_memory(static_cast<const char*>(content),length)||
+ if(!parsed.load_from_memory(text,length)||
     !valid_lens(parsed))return;
  entry.lens=std::move(parsed);
  entry.valid=true;
@@ -117,19 +131,19 @@ std::uint64_t geometry_hash(const LensSystem& l) noexcept{
 }
 }
 
-extern "C" __declspec(dllexport)
+extern "C" FLARELENS_EXPORT
 int FlareLensQuickPresetCatalogID(int quick_preset){
  return fl::catalog::quick_preset_index(quick_preset);
 }
 
-extern "C" __declspec(dllexport)
+extern "C" FLARELENS_EXPORT
 int FlareLensInspectCatalog(int id,fl::catalog::Report* out){
  if(!out||out->size!=sizeof(fl::catalog::Report))return 0;
  fl::catalog::Report report{};
  report.count=fl::catalog::kCount;
  report.index=id;
  if(const auto* name=fl::catalog::filename(id))
-  strncpy_s(report.filename,sizeof(report.filename),name,_TRUNCATE);
+  std::snprintf(report.filename,sizeof(report.filename),"%s",name);
  if(const auto* lens=fl::catalog::lens_by_index(id)){
   report.valid=1;
   report.renderable=lens->num_surfaces()>=2&&

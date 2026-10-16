@@ -1,8 +1,12 @@
 #pragma once
+#if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
+using FlareLensNativeWindow = HWND;
+#else
+using FlareLensNativeWindow = void*;
+#endif
 namespace fl::catalog {
-// Only the Adobe user-changed-parameter selector calls this modal browser.
-// No After Effects GUI operations are initiated by the development agent.
-bool choose_embedded_lens(HWND owner,int current_index,int& chosen_index);
+// User-triggered native modal lens browser; never called on AE render threads.
+bool choose_embedded_lens(FlareLensNativeWindow owner,int current_index,int& chosen_index);
 }

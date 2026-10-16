@@ -60,8 +60,10 @@ diffraction calculation is **not** a complete wave-optical simulation of
 every internal lens reflection.
 
 The Windows GPU implementation uses the CUDA stream supplied by the After
-Effects host. A CPU render path is also provided. Native Vulkan and macOS
-Metal implementations are not currently available.
+Effects host. A CPU render path is also provided. An experimental **macOS
+CPU-only port** is under development with a GitHub Actions workflow; it is
+not yet a tested/distributed Mac plugin. Native Vulkan and macOS Metal GPU
+renderers are not currently available. See [macOS build](docs/MACOS_BUILD.md).
 
 ---
 
@@ -82,7 +84,8 @@ To build from source, obtain the Adobe After Effects SDK and NVIDIA CUDA
 Toolkit, then compile with CMake as described in the installation guide.
 
 **Requirements:**
-- **Platform:** Windows x64 (current source build)
+- **Platform:** Windows x64 (released); macOS CPU source build in progress
+  (see [macOS build instructions](docs/MACOS_BUILD.md))
 - **Host:** Adobe After Effects with a compatible native effect plug-in API;
   the newest build still needs manual host validation
 - **Build tools:** CMake 3.24+, Visual Studio 2022 with the Windows SDK
@@ -425,10 +428,13 @@ limitations.
 The current source supports Windows x64 builds with Visual Studio,
 CMake, and the Adobe After Effects SDK. CUDA acceleration is optional
 at build time; no proprietary Adobe SDK files are included in this
-repository.
+repository. The macOS source path and its GitHub Actions workflow remain
+experimental and require a separately supplied Mac AE SDK; a successful
+portable core test alone does not validate a native Mac effect.
 
 See [INSTALL.md](INSTALL.md) for compilation,
-[Architecture](docs/ARCHITECTURE.md) for the rendering system, and
+[Architecture](docs/ARCHITECTURE.md) for the rendering system,
+[macOS build](docs/MACOS_BUILD.md) for platform status, and
 [Keyframe animation](docs/KEYFRAME_ANIMATION.md) for the saved custom
 lens data format.
 

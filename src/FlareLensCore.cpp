@@ -76,14 +76,14 @@ Image render_cpu(const LensSystem& lens,const std::vector<Source>& sources,
  const auto& boosts=selection->boosts;
  const int np=std::min<int>(int(pairs.size()),s.max_pairs);
  if(np<1)return out;
- const auto pupil=make_pupil(s);
+ const auto pupil=cached_pupil(s);
  const auto spectrum=make_spectrum(s);
- if(pupil.empty()||spectrum.empty())return out;
+ if(pupil->empty()||spectrum.empty())return out;
  // Exact upstream ghost_cuda.cu scatter semantics: full-frame 2x2 bilinear
  // pixel splat, with ray_weight=1/n_pupil. No intermediate map, kernel,
  // resampling or compensating exposure.
  out.rgb.assign(size_t(w)*h*3,0);
- const float normalization=1.f/float(pupil.size());
+ const float normalization=1.f/float(pupil->size());
  const float tan_h=std::tan(fov_h*.5f);
  for(const auto& light:sources){
   if(control.check_abort&&(out.abort_error=control.check_abort(control.context)))return out;
@@ -99,7 +99,7 @@ Image render_cpu(const LensSystem& lens,const std::vector<Source>& sources,
    if((s.pair_mode==1&&!selected)||(s.pair_mode==2&&selected))continue;
    out.diagnostics.active_pairs++;
    int sample_counter=0;
-   for(const auto& sample:pupil){
+   for(const auto& sample:*pupil){
     if((++sample_counter%128)==0&&control.check_abort&&
        (out.abort_error=control.check_abort(control.context)))return out;
     Ray ray{};

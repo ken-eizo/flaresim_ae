@@ -30,6 +30,20 @@ This is why a 512-ray-grid setting alone cannot determine whether 10 ms is achie
 - **Kept:** omission of unused analytic-haze X/Y scratch buffers. With a 1920x1080 image and 512 sources, ghost-only mode saves 6,144,000 bytes of temporary GPU allocation.
 - **Rejected:** caching wavelength-dependent index of refraction in extra global GPU arrays made the tested workload slower. That experiment was reverted.
 
+## CPU sample-memory improvement (2026-10-16)
+
+- The CPU optical ray tracer now borrows an immutable, shared pupil-sampling
+  vector directly from a bounded, thread-safe cache instead of copying that
+  vector for each frame. The original `make_pupil` value-returning API is
+  preserved for callers that require an owned vector.
+- A full 512×512 2-float pupil contains up to 262,144 samples, or
+  **2,097,152 bytes**. The optimization avoids copying this memory on a
+  cache hit in the CPU render path; it does not change sampling positions,
+  radiometric weights or output pixel values.
+- This change does not replace the GPU ray-tracing kernels. Its frame-time
+  benefit has not been benchmarked in After Effects. The embedded macOS
+  CPU-port testing shares the same optical core.
+
 ## Vulkan
 
 A Vulkan compute implementation is technically possible but is **not present**. A direct translation of the same kernels cannot be assumed faster than CUDA. After Effects currently provides this implementation with a CUDA-managed GPU world and stream; introducing Vulkan would require a separately verified memory-sharing and synchronization architecture, or additional frame copies.

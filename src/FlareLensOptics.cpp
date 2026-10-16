@@ -31,7 +31,7 @@ float halton3(uint32_t x){
  return r;
 }
 } // namespace
-std::vector<PupilSample> make_pupil(const Settings& s){
+std::shared_ptr<const std::vector<PupilSample>> cached_pupil(const Settings& s){
  const int n=std::clamp(s.grid,2,2048);
  const int blades=std::clamp(s.aperture_blades,0,16);
  const float rotate=std::isfinite(s.aperture_rotation_deg)?s.aperture_rotation_deg*pi/180.f:0;
@@ -58,7 +58,7 @@ std::vector<PupilSample> make_pupil(const Settings& s){
    existing=entry.second;break;
   }
  }
- if(existing)return *existing;
+ if(existing)return existing;
  std::vector<PupilSample> result;
  result.reserve(n*n);
  for(int k=0;k<n*n;k++){
@@ -89,15 +89,18 @@ std::vector<PupilSample> make_pupil(const Settings& s){
  }
  // Large final-quality sets are consumed once per render. Move them
  // directly to the caller without building a second temporary copy.
- if(n>512)return result;
- auto created=std::make_shared<const Samples>(result);
+ if(n>512)return std::make_shared<const Samples>(std::move(result));
+ auto created=std::make_shared<const Samples>(std::move(result));
  {
   std::lock_guard<std::mutex> lock(cache_mutex);
-  for(const auto& entry:cache)if(entry.first==key)return *entry.second;
+  for(const auto& entry:cache)if(entry.first==key)return entry.second;
   if(cache.size()>=24)cache.pop_front();
-  cache.emplace_back(key,std::move(created));
+  cache.emplace_back(key,created);
  }
- return result;
+ return created;
+}
+std::vector<PupilSample> make_pupil(const Settings& s){
+ return *cached_pupil(s);
 }
 std::vector<SpectralSample> make_spectrum(const Settings& s){
  int n=s.spectral_samples;

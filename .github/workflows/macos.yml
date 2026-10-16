@@ -1,0 +1,92 @@
+name: macOS build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/macos.yml'
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'src/**'
+      - 'scripts/embed_lenses_mac.py'
+      - 'upstream/src/**'
+      - 'upstream/lenses/lens_files/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    name: macOS CPU optical core
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure portable CPU tests (no proprietary SDK required)
+        run: cmake -S . -B build-macos-core -DCMAKE_BUILD_TYPE=Release -DFLARELENS_BUILD_AE=OFF -DFLARELENS_ENABLE_CUDA=OFF
+      - name: Compile portable optical core
+        run: cmake --build build-macos-core --parallel 3
+      - name: Run portable tests
+        run: ctest --test-dir build-macos-core --output-on-failure --parallel 3
+
+  ae-plugin:
+    name: macOS native AE plugin (CPU)
+    # SDK must be provisioned privately: GitHub-hosted macOS cannot access
+    # the Windows PC E: drive. Never vendor proprietary Adobe SDK files.
+    if: ${{ vars.FLARESIM_MAC_SDK_READY == 'true' }}
+    runs-on: macos-15
+    timeout-minutes: 50
+    env:
+      AE_SDK_MAC_URL: ${{ secrets.AE_SDK_MAC_URL }}
+      AE_SDK_MAC_SHA256: 'e02fa2b488c3cceb238866b648eb9a2526d308a260744367915a2f173663c36c'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check SDK provisioning
+        shell: bash
+        run: |
+          test -n "$AE_SDK_MAC_URL" || { echo "::error::Set AE_SDK_MAC_URL to a private HTTPS download for the locally provided Mac SDK archive."; exit 1; }
+      - name: Install trusted Zstandard decoder
+        run: brew install zstd
+      - name: Download and verify separately supplied SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --silent --show-error --proto '=https' --tlsv1.2 "$AE_SDK_MAC_URL" -o "$RUNNER_TEMP/ae-mac-sdk.tar.zstd"
+          actual="$(shasum -a 256 "$RUNNER_TEMP/ae-mac-sdk.tar.zstd" | cut -d ' ' -f1)"
+          test "$actual" = "$AE_SDK_MAC_SHA256" || { echo "::error::SDK SHA-256 mismatch"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/ae-sdk"
+          # The user's file ends in .tar.zstd.zip but has a real Zstandard
+          # magic header 28 B5 2F FD (not a ZIP container).
+          zstd -d -c "$RUNNER_TEMP/ae-mac-sdk.tar.zstd" | tar -xf - -C "$RUNNER_TEMP/ae-sdk"
+          root="$(find "$RUNNER_TEMP/ae-sdk" -type f -path '*/Headers/AE_Effect.h' -print -quit)"
+          test -n "$root" || { echo "::error::Mac SDK Headers/AE_Effect.h not found"; exit 1; }
+          examples="$(dirname "$(dirname "$root")")"
+          test -f "$examples/Util/AEFX_SuiteHelper.c" || { echo "::error::AEFX_SuiteHelper.c missing"; exit 1; }
+          echo "AE_SDK_ROOT=$examples" >> "$GITHUB_ENV"
+      - name: Configure universal macOS AE effect
+        run: |
+          cmake -S . -B build-macos-ae -G Ninja -DCMAKE_BUILD_TYPE=Release             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0             -DAE_SDK_ROOT="$AE_SDK_ROOT"             -DFLARELENS_BUILD_AE=ON -DFLARELENS_ENABLE_CUDA=OFF
+      - name: Compile FlareSimAE.plugin
+        run: cmake --build build-macos-ae --target FlareLensAE --parallel 3
+      - name: Check native bundle and architectures
+        shell: bash
+        run: |
+          set -euo pipefail
+          plugin="$(find build-macos-ae -name 'FlareSimAE.plugin' -type d -print -quit)"
+          test -n "$plugin" || { echo "::error::No plugin bundle generated"; exit 1; }
+          binary="$plugin/Contents/MacOS/FlareSimAE"
+          test -f "$binary"
+          file "$binary"
+          lipo -verify_arch arm64 x86_64 "$binary"
+          find "$plugin/Contents/Resources" -type f -name '*.rsrc' -print -quit | grep .
+          codesign --force --deep --sign - "$plugin"
+          ditto -c -k --keepParent "$plugin" "$RUNNER_TEMP/FlareSimAE_macOS_CPU_unverified.zip"
+          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_macOS_CPU_unverified.zip" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FlareSimAE-macOS-CPU-unverified
+          path: ${{ env.FLARE_MAC_ZIP }}
+          if-no-files-found: error
+          retention-days: 14

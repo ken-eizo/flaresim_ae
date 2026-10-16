@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
-project(FlareLensAE LANGUAGES C CXX RC)
+if(WIN32)
+ project(FlareLensAE LANGUAGES C CXX RC)
+else()
+ project(FlareLensAE LANGUAGES C CXX)
+endif()
 set(CMAKE_CXX_STANDARD 20)
 # CUDA static runtime needs the same CRT as the native AE plugin objects.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -86,8 +90,34 @@ file(WRITE "${FLARE_GEN_DIR}/FlareLensCatalogEmbedded.rc" "${FLARE_LENS_RC}")
 file(WRITE "${FLARE_GEN_DIR}/FlareLensCatalog.tsv" "${FLARE_LENS_INDEX}")
 message(STATUS "Embedding ${FLARE_LENS_COUNT} original Nuke lens prescriptions")
 
+# Cross-platform binary catalog parity: the macOS embedded byte table must
+# match each original Windows RCDATA .lens file byte-for-byte.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(FLARE_MAC_EMBED_CPP "${FLARE_GEN_DIR}/FlareLensEmbeddedMac.cpp")
+add_custom_command(OUTPUT "${FLARE_MAC_EMBED_CPP}"
+ COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_lenses_mac.py"
+ --manifest "${CMAKE_CURRENT_SOURCE_DIR}/src/NukeLensCatalogOriginal.txt"
+ --root "${FLARE_LENS_ROOT}" --output "${FLARE_MAC_EMBED_CPP}"
+ DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_lenses_mac.py"
+   "${CMAKE_CURRENT_SOURCE_DIR}/src/NukeLensCatalogOriginal.txt"
+ COMMENT "Embedding original lens bytes for cross-platform verification"
+ VERBATIM)
+add_executable(FlareLensMacCatalogEmbeddingTest
+ tests/mac_catalog_embedding_test.cpp "${FLARE_MAC_EMBED_CPP}")
+target_include_directories(FlareLensMacCatalogEmbeddingTest PRIVATE
+ src "${FLARE_GEN_DIR}")
+target_compile_definitions(FlareLensMacCatalogEmbeddingTest PRIVATE
+ FLARELENS_TEST_SOURCE_DIR="${FLARE_LENS_ROOT}")
+add_test(NAME FlareLensMacCatalogEmbeddingTest
+ COMMAND FlareLensMacCatalogEmbeddingTest)
+
 option(FLARELENS_BUILD_AE "Build AE effect" ON)
 option(FLARELENS_ENABLE_CUDA "Native AE host-managed CUDA render" ON)
+if(APPLE)
+ if(FLARELENS_BUILD_AE)
+  include(cmake/MacOS.cmake)
+ endif()
+else()
 if(FLARELENS_BUILD_AE)
  if(NOT EXISTS "${AE_SDK_ROOT}/Headers/AE_Effect.h")
   message(FATAL_ERROR "Set -DAE_SDK_ROOT=<Adobe After Effects SDK Examples directory>")
@@ -270,4 +300,6 @@ if(FLARELENS_BUILD_AE)
    message(WARNING "CUDA compiler not found; compiling CPU-only SmartFX plugin.")
   endif()
  endif()
+endif()
+# End Windows-only AE integration; macOS uses cmake/MacOS.cmake.
 endif()

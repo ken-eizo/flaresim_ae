@@ -1,4 +1,6 @@
 #pragma once
+#if defined(_WIN32)
+
 // Development-only, bounded, nonblocking-best-effort telemetry from the REAL
 // After Effects render selectors. No GUI, no AE process control, no video data.
 // The tracer is opt-out by an appended AE checkbox and deliberately records
@@ -51,3 +53,17 @@ inline void host_trace(bool enabled,const char* stage,const char* facts) noexcep
  CloseHandle(file);
 }
 }
+
+#else
+#include <atomic>
+#include <cstdio>
+namespace fl {
+inline void host_trace(bool enabled,const char* stage,const char* facts) noexcept {
+ if(!enabled)return;
+ static std::atomic<unsigned> emitted{0};
+ if(emitted.fetch_add(1,std::memory_order_relaxed)>=256)return;
+ std::fprintf(stderr,"FlareSimAE 1.0.0 %s %s\n",
+   stage?stage:"-",facts?facts:"");
+}
+}
+#endif

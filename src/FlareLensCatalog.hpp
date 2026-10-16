@@ -27,7 +27,12 @@ struct Report {
 };
 std::uint64_t geometry_hash(const LensSystem& lens) noexcept;
 }
-extern "C" __declspec(dllexport)
+#if defined(_WIN32)
+#define FLARELENS_EXPORT __declspec(dllexport)
+#else
+#define FLARELENS_EXPORT __attribute__((visibility("default")))
+#endif
+extern "C" FLARELENS_EXPORT
 int FlareLensInspectCatalog(int one_based,fl::catalog::Report* out);
-extern "C" __declspec(dllexport)
+extern "C" FLARELENS_EXPORT
 int FlareLensQuickPresetCatalogID(int quick_preset);

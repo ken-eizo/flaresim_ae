@@ -247,8 +247,10 @@ into the editable After Effects parameter.
 
 ## Build limitations
 
-The current native plug-in targets Windows. A macOS/Metal build and a
-native Vulkan renderer are not part of this source release.
+The v1.0.0 Release distributes Windows binaries only. An experimental
+macOS **CPU-only** source build and GitHub Actions workflow are documented
+in [docs/MACOS_BUILD.md](docs/MACOS_BUILD.md); native Metal and Vulkan GPU
+renderers remain unimplemented. Mac plugin compatibility is not yet validated.
 
 The project is based on
 [FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke).
