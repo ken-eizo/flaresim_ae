@@ -306,8 +306,12 @@ static int validate_requested_rect_contract(Main effect,PF_InData& in){
  PF_PreRenderCallbacks callback{};
  callback.checkout_layer=&checkout_pre_input;
  struct Case {PF_LRect request,expected;int ds_num,ds_den;bool detect;};
- const std::array<Case,7> cases{{
+ const std::array<Case,9> cases{{
   {{0,0,960,540},{0,0,960,540},1,1,false},
+  // Reproduced from actual After Effects 26.3: expanded host bounds used to
+  // disqualify CUDA despite what_gpu=CUDA and a full valid sensor output.
+  {{-192,-192,1152,732},{0,0,960,540},1,1,false},
+  {{-192,-192,1152,732},{0,0,960,540},1,1,true},
   {{100,50,450,300},{100,50,450,300},1,1,false},
   {{-120,-40,140,180},{0,0,140,180},1,1,false},
   {{900,500,1300,800},{900,500,960,540},1,1,false},
@@ -351,6 +355,10 @@ static int validate_requested_rect_contract(Main effect,PF_InData& in){
   // even if AE requests a sub-rectangle. Non-CUDA diagnostics keep ROI.
 #ifdef FLARELENS_HAVE_CUDA
   if(!same(g_last_input_request,full))return 120+int(i);
+  const bool visible=t.expected.right>t.expected.left&&
+                     t.expected.bottom>t.expected.top;
+  if(bool(result.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE)!=visible)
+   return 140+int(i);
 #else
   if(!t.detect&&!same(g_last_input_request,t.expected))return 120+int(i);
   if(t.detect&&!same(g_last_input_request,full))return 130+int(i);
@@ -360,7 +368,7 @@ static int validate_requested_rect_contract(Main effect,PF_InData& in){
  }
  g_params[5].u.bd.value=FALSE;
  std::cout<<"AE_PRE_RENDER_REQUEST_BOUNDS_CONTRACT_PASSED "
-          <<" cases=7 full_subrect_negative_outside_auto_half\n";
+          <<" cases=9 full_subrect_negative_padded_outside_auto_half\n";
  return 0;
 }
 

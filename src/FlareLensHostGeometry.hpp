@@ -43,8 +43,14 @@ inline HostGeometry host_geometry(int source_w,int source_h,
  g.light_scale_x=dsx;g.light_scale_y=dsy;
  const int inferred_w=source_w>0?int(std::lround(source_w*dsx)):0;
  const int inferred_h=source_h>0?int(std::lround(source_h*dsy)):0;
- g.full_w=std::max({1,inferred_w,output_w+std::max(0,output_x)});
- g.full_h=std::max({1,inferred_h,output_h+std::max(0,output_y)});
+ // The source layer's full dimensions define the optical sensor. AE may
+ // provide a GPU output World padded beyond the layer bounds; never grow
+ // the sensor to that checkout rectangle (even for a same-sized solid).
+ // Only fall back to the output extent if the host supplied no source size.
+ g.full_w=inferred_w>0?inferred_w:
+   std::max(1,output_w+std::max(0,output_x));
+ g.full_h=inferred_h>0?inferred_h:
+   std::max(1,output_h+std::max(0,output_y));
  return g;
 }
 }

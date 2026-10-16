@@ -821,14 +821,14 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  const bool detectable=!args.auto_detect||
   fl::gpu::detection_scratch_bytes(full.right,full.bottom,
                                    std::clamp(scan_step,1,32))>0;
- const bool in_frame_roi=output_rect.left>=0&&output_rect.top>=0&&
-   output_rect.right<=full.right&&output_rect.bottom<=full.bottom&&
-   output_rect.right>output_rect.left&&
-   output_rect.bottom>output_rect.top;
- // Auto-detected rays influence pixels outside the source region. Render
- // the full optical field on-device, then crop to the host's requested ROI.
- // No false dependency region or CPU optical fallback for AE tiled requests.
- const bool gpu_geometry=in_frame_roi;
+ // AE routinely expands the output request BEYOND the layer bounds (e.g.
+ // -192,-192..2112,2112 for a 1920-square composition). The actual
+ // emitted optical image is bounded by result_rect = requested ∩ sensor.
+ // Restrict GPU eligibility by the nonempty INTERSECTION, not by whether
+ // the entire host request is inside the sensor. The old test forced CPU
+ // for every normal expanded request in AE even when CUDA was available.
+ const bool gpu_geometry=visible.right>visible.left&&
+                         visible.bottom>visible.top;
  const bool can_gpu=extra->input->what_gpu==PF_GPU_Framework_CUDA&&
    detectable&&gpu_output&&args.star_gain<=0&&
    valid_scale&&gpu_geometry&&full.right>0&&full.bottom>0&&
@@ -912,12 +912,22 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
                    output->origin_x!=0||output->origin_y!=0;
   if(!geometry.valid()||full_w<1||full_h<1||full_w>16384||full_h>16384)
     err=PF_Err_BAD_CALLBACK_PARAM;
-  // A host-requested manual-source tile is valid on CUDA: pre_render has
-  // checked out the COMPLETE input sensor. The GPU produces full-sensor
-  // ghosts and then copies only the requested rectangular output.
-  if(!err&&tiled&&(output->origin_x<0||
-     output->origin_y<0||output->origin_x+output->width>full_w||
-     output->origin_y+output->height>full_h))err=PF_Err_BAD_CALLBACK_PARAM;
+  // The host may supply either the clipped result_rect, or an output
+  // world with padding beyond the optical sensor. Generate the full
+  // optical sensor in CUDA, then copy only the actual intersection.
+  // Explicit 64-bit endpoint arithmetic avoids signed origin overflow.
+  const int64_t output_right=int64_t(output->origin_x)+output->width;
+  const int64_t output_bottom=int64_t(output->origin_y)+output->height;
+  const int copy_left=std::max(0,output->origin_x);
+  const int copy_top=std::max(0,output->origin_y);
+  const int copy_right=int(std::min(int64_t(full_w),output_right));
+  const int copy_bottom=int(std::min(int64_t(full_h),output_bottom));
+  const bool output_padded=output->origin_x<0||output->origin_y<0||
+                         output_right>full_w||output_bottom>full_h;
+  if(!err&&(output->width<=0||output->height<=0||
+    output->rowbytes<int64_t(output->width)*16||
+    copy_right<=copy_left||copy_bottom<=copy_top))
+     err=PF_Err_BAD_CALLBACK_PARAM;
   if(!err)err=gs->GetGPUWorldData(in->effect_ref,output,&dst);
   if(!err&&input)err=gs->GetGPUWorldData(in->effect_ref,input,&src);
   // Empty transparent source may have no checkout world at all. In that
@@ -1062,13 +1072,27 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     }
     if(!err&&tiled){
      const auto* full=static_cast<const uint8_t*>(full_gpu_output);
+     auto* clipped=static_cast<uint8_t*>(dst);
      const size_t source_offset=
-       (size_t(output->origin_y)*size_t(full_w)+output->origin_x)*16;
-     if(cudaMemcpy2DAsync(dst,output->rowbytes,full+source_offset,
-          size_t(full_w)*16,size_t(output->width)*16,output->height,
-          cudaMemcpyDeviceToDevice,render_stream)!=cudaSuccess||
-        cudaStreamSynchronize(render_stream)!=cudaSuccess)
-      err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+       (size_t(copy_top)*size_t(full_w)+size_t(copy_left))*16;
+     const size_t destination_offset=
+       size_t(copy_top-output->origin_y)*size_t(output->rowbytes)+
+       size_t(copy_left-output->origin_x)*16;
+     // Pixels outside result_rect are transparent black, never a
+     // partially uninitialized GPU World or an out-of-range memcpy.
+     if(output_padded&&cudaMemset2DAsync(
+          dst,size_t(output->rowbytes),0,
+          size_t(output->width)*16,size_t(output->height),
+          render_stream)!=cudaSuccess)
+       err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+     if(!err&&cudaMemcpy2DAsync(clipped+destination_offset,
+          size_t(output->rowbytes),full+source_offset,
+          size_t(full_w)*16,size_t(copy_right-copy_left)*16,
+          size_t(copy_bottom-copy_top),cudaMemcpyDeviceToDevice,
+          render_stream)!=cudaSuccess)
+       err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+     if(!err&&cudaStreamSynchronize(render_stream)!=cudaSuccess)
+       err=PF_Err_INTERNAL_STRUCT_DAMAGED;
     }
     if(args.host_trace){
      const auto elapsed=std::chrono::duration<double,std::milli>(

@@ -112,11 +112,14 @@ static PF_Err checkout_gpu_output(PF_ProgPtr,PF_EffectWorld** value){
 static int one_render(Main effect,PF_InData& in,int mode,
                       int width,int height,const LensSystem& lens,bool adaptive=false,
                       bool detect=false,bool tile=false,int many=0,
-                      int quick_preset=1,int catalog_id=0,bool custom=false){
+                      int quick_preset=1,int catalog_id=0,bool custom=false,
+                      bool expanded_request=false,bool padded_output=false){
  const size_t n=size_t(width)*height;
  const size_t bytes=n*16;
- const int roi_x=tile?width/4:0,roi_y=tile?height/4:0;
- const int roi_w=tile?width/2:width,roi_h=tile?height/2:height;
+ const int roi_x=tile?width/4:(padded_output?-24:0);
+ const int roi_y=tile?height/4:(padded_output?-24:0);
+ const int roi_w=tile?width/2:(padded_output?width+48:width);
+ const int roi_h=tile?height/2:(padded_output?height+48:height);
  const size_t output_bytes=size_t(roi_w)*roi_h*16;
  void* device=nullptr;
  if(cudaMalloc(&device,output_bytes)!=cudaSuccess)return 20;
@@ -183,14 +186,20 @@ static int one_render(Main effect,PF_InData& in,int mode,
  PF_PreRenderInput pre_input{};
  pre_input.what_gpu=PF_GPU_Framework_CUDA;
  pre_input.device_index=0;
- pre_input.output_request.rect={roi_x,roi_y,roi_x+roi_w,roi_y+roi_h};
+ pre_input.output_request.rect=expanded_request?
+    PF_LRect{-192,-192,width+192,height+192}:
+    PF_LRect{roi_x,roi_y,roi_x+roi_w,roi_y+roi_h};
  pre_input.output_request.channel_mask=PF_ChannelMask_ARGB;
  PF_PreRenderOutput pre_output{};
  PF_PreRenderExtra pre_extra{&pre_input,&pre_output,&pre_callbacks};
  PF_OutData out{};
  PF_Err err=effect(PF_Cmd_SMART_PRE_RENDER,&in,&out,nullptr,nullptr,&pre_extra);
  if(err||!(pre_output.flags&PF_RenderOutputFlag_GPU_RENDER_POSSIBLE)||
-    !pre_output.pre_render_data){
+    !pre_output.pre_render_data||
+    (expanded_request&&
+      (pre_output.result_rect.left!=0||pre_output.result_rect.top!=0||
+       pre_output.result_rect.right!=width||
+       pre_output.result_rect.bottom!=height))){
   std::cerr<<"AEX did not authorize GPU for mode "<<mode<<"\n";
   return 22;
  }
@@ -278,9 +287,15 @@ static int one_render(Main effect,PF_InData& in,int mode,
  double sum=0,difference=0;
  size_t visible=0,alpha_errors=0;
  for(size_t i=0;i<size_t(roi_w)*roi_h;i++){
-  const size_t frame_index=(size_t(roi_y)+i/roi_w)*width+
-                            size_t(roi_x)+i%roi_w;
+  const int pixel_x=roi_x+int(i%roi_w);
+  const int pixel_y=roi_y+int(i/roi_w);
   const float b=pixels[i*4],g=pixels[i*4+1],r=pixels[i*4+2],a=pixels[i*4+3];
+  // Extended GPU worlds carry transparent black outside the actual sensor.
+  if(pixel_x<0||pixel_y<0||pixel_x>=width||pixel_y>=height){
+   if(b!=0.f||g!=0.f||r!=0.f||a!=0.f)return 35;
+   continue;
+  }
+  const size_t frame_index=size_t(pixel_y)*width+size_t(pixel_x);
   if(!std::isfinite(r)||!std::isfinite(g)||!std::isfinite(b)||
      !std::isfinite(a))return 28;
   const float want_alpha=mode==1?
@@ -311,7 +326,7 @@ static int one_render(Main effect,PF_InData& in,int mode,
  // conservative 2-frame allocation used by standalone compatibility API.
  // A tiled request intentionally allocates a full-sensor CUDA output
  // before cropping; the old scratch-memory invariant applies to full frames.
- if(!tile&&!detect&&(mode==2||mode==5)&&
+ if(!tile&&!padded_output&&!detect&&(mode==2||mode==5)&&
     max_allocation>=size_t(width)*height*4){
   std::cerr<<"AEX allocated unnecessary full-frame CUDA scratch mode="
            <<mode<<" bytes="<<max_allocation<<"\n";
@@ -374,6 +389,21 @@ int main(){
   if(err)return 5000+100*mode+err;
  }
  std::cout<<"MANUAL_LIGHT_CUDA_TILED_ROI_CPU_REFERENCE_PARITY_PASSED\n";
+ // The AE host can expand a request beyond all four sensor boundaries.
+ for(int mode:{1,2,3,4,5}){
+  const int err=one_render(effect,in,mode,640,360,lens,
+                           false,false,false,0,1,0,false,true);
+  if(err)return 5600+100*mode+err;
+ }
+ std::cout<<"REAL_AE_EXPANDED_REQUEST_GPU_PARITY_PASSED\n";
+ // Defensive case: AE supplies an expanded output world rather than
+ // cropping its GPU world to the visible sensor region.
+ for(int mode:{1,2,3,4,5}){
+  const int err=one_render(effect,in,mode,640,360,lens,
+                           false,false,false,0,1,0,false,true,true);
+  if(err)return 6700+100*mode+err;
+ }
+ std::cout<<"REAL_AE_PADDED_GPU_WORLD_SAFE_COPY_PARITY_PASSED\n";
  if(const int err=one_render(effect,in,1,640,360,lens,true))
   return 700+err;
  if(const int err=one_render(effect,in,2,640,360,lens,false,true))
