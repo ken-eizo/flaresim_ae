@@ -304,20 +304,14 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
              uint32_t(v.output_pitch_bytes/16),uint32_t(v.output_mode),1.f};
  id<MTLCommandBuffer> cmd=[queue commandBuffer];
  if(v.output_mode==3){
-  // The shader computes dimmed input and cross markers in one GPU pass.
-  uint32_t count=uint32_t(lights.size());
-  auto state=pipeline(dev,@"fl_preview");
-  if(!state||!src)return false;
-  id<MTLComputeCommandEncoder> enc=[cmd computeCommandEncoder];
-  [enc setComputePipelineState:state];
-  [enc setBuffer:src offset:0 atIndex:0];
-  [enc setBuffer:dst offset:0 atIndex:1];
-  if(light_gpu)[enc setBuffer:light_gpu offset:0 atIndex:2];
-  [enc setBytes:&image length:sizeof(image) atIndex:3];
-  [enc setBytes:&count length:sizeof(count) atIndex:4];
-  [enc dispatchThreads:MTLSizeMake(pixels,1,1)
-      threadsPerThreadgroup:MTLSizeMake(std::min<NSUInteger>(256,state.maxTotalThreadsPerThreadgroup),1,1)];
-  [enc endEncoding];
+  if(!src)return false;
+  if(!encode(cmd,dev,@"fl_preview_base",pixels,{src,dst},
+     &image,sizeof(image),2))return false;
+  if(!lights.empty()){
+   image.mode=uint32_t(lights.size());
+   if(!encode(cmd,dev,@"fl_preview_mark",lights.size()*121,
+      {src,dst,light_gpu},&image,sizeof(image),3))return false;
+  }
   return finish(cmd);
  }
  if(!encode(cmd,dev,@"fl_plate",pixels,{src,dst},&image,sizeof(image),2))

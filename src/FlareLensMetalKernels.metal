@@ -83,27 +83,42 @@ kernel void fl_plate(
  const float4 in=input[y*a.input_pitch+x];
  output[y*a.output_pitch+x]=a.mode==1?in:float4(0,0,0,1);
 }
-kernel void fl_preview(
+// Source preview is O(pixels + sources*121), NOT O(pixels*sources).
+kernel void fl_preview_base(
  device const float4* input [[buffer(0)]],
  device float4* output [[buffer(1)]],
- device const FlSource* sources [[buffer(2)]],
- constant FlImage& a [[buffer(3)]],
- constant uint& count [[buffer(4)]],
+ constant FlImage& a [[buffer(2)]],
  uint tid [[thread_position_in_grid]]){
  if(tid>=a.width*a.height)return;
- const int x=int(tid%a.width),y=int(tid/a.width);
- float4 v=input[uint(y)*a.input_pitch+uint(x)]*.12f;
+ const uint x=tid%a.width,y=tid/a.width;
+ float4 v=input[y*a.input_pitch+x]*.12f;
  v.w=1.f;
- for(uint i=0;i<count;i++){
-  const int dx=x-int(floor(sources[i].angle_x*a.width));
-  const int dy=y-int(floor(sources[i].angle_y*a.height));
-  const int r2=dx*dx+dy*dy;
-  if(abs(dx)<=5&&abs(dy)<=5&&
-     ((r2>=9&&r2<=25)||(dx==0&&r2<=25)||(dy==0&&r2<=25))){
-   v.xyz+=float3(1.f);
-  }
- }
- output[uint(y)*a.output_pitch+uint(x)]=v;
+ output[y*a.output_pitch+x]=v;
+}
+kernel void fl_preview_mark(
+ device const float4* input [[buffer(0)]],
+ device atomic_uint* output [[buffer(1)]],
+ device const FlSource* sources [[buffer(2)]],
+ constant FlImage& a [[buffer(3)]],
+ uint tid [[thread_position_in_grid]]){
+ if(tid>=a.mode*121u)return;
+ const uint index=tid/121u,p=tid%121u;
+ const int dx=int(p%11u)-5,dy=int(p/11u)-5;
+ const int r2=dx*dx+dy*dy;
+ if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
+      (dy==0&&r2<=25)))return;
+ const int x=int(floor(sources[index].angle_x*a.width))+dx;
+ const int y=int(floor(sources[index].angle_y*a.height))+dy;
+ if(x<0||y<0||x>=int(a.width)||y>=int(a.height))return;
+ const uint src_pos=uint(y)*a.input_pitch+uint(x);
+ const uint dst_pos=(uint(y)*a.output_pitch+uint(x))*4;
+ const float4 in=input[src_pos];
+ atomic_store_explicit(output+dst_pos,
+   as_type<uint>(in.x*.12f+1.f),memory_order_relaxed);
+ atomic_store_explicit(output+dst_pos+1,
+   as_type<uint>(in.y*.12f+1.f),memory_order_relaxed);
+ atomic_store_explicit(output+dst_pos+2,
+   as_type<uint>(in.z*.12f+1.f),memory_order_relaxed);
 }
 kernel void fl_add(
  device const float4* photon [[buffer(0)]],
