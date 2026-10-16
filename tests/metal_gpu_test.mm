@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #include "FlareLensMetal.hpp"
 #include "FlareLensCore.hpp"
+#include "FlareLensOptics.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -66,6 +67,26 @@ int main(){
             <<" reference_energy="<<energy<<"\n";
    if(energy<1e-7||relative>.08)return 30+mode;
   }
+  // Exercise nonzero separable ghost blur against the shared CPU baseline.
+  view.output_mode=2;
+  view.ghost_blur=.025f;
+  view.ghost_blur_passes=2;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+      (__bridge void*)scratch,scratch_bytes))return 46;
+  auto blurred=reference.rgb;
+  const int radius=int(std::round(view.ghost_blur*
+                                    std::hypot(float(w),float(h))));
+  fl::box_blur_rgb(blurred,w,h,radius,view.ghost_blur_passes);
+  const auto* blur_result=static_cast<const float*>(out.contents);
+  double blur_diff=0,blur_energy=0;
+  for(size_t i=0;i<n;i++)for(int c=0;c<3;c++){
+   blur_diff+=std::abs(double(blur_result[i*4+2-c])-blurred[i*3+c]);
+   blur_energy+=std::abs(double(blurred[i*3+c]));
+  }
+  if(blur_energy<1e-8||blur_diff/blur_energy>.04)return 47;
+  std::cout<<"METAL_GHOST_BLUR_CPU_PARITY relL1="
+           <<blur_diff/blur_energy<<"\n";
+  view.ghost_blur=0.f;
   view.output_mode=3;
   if(!fl::gpu::metal_compose(lens,sources,cfg,view,
        (__bridge void*)scratch,scratch_bytes))return 40;
@@ -84,6 +105,19 @@ int main(){
   double haze_energy=0;
   for(size_t i=0;i<n;i++)haze_energy+=haze[i*4]+haze[i*4+1]+haze[i*4+2];
   if(haze_energy<=0||!std::isfinite(haze_energy))return 43;
+  std::vector<fl::Source> dense;
+  for(int i=0;i<12;i++)
+   dense.push_back({.2f+.05f*i,.3f+.02f*i,1.f,.8f,.6f});
+  view.haze_footprint=4;
+  if(!fl::gpu::metal_compose(lens,dense,cfg,view,
+       (__bridge void*)scratch,scratch_bytes))return 48;
+  const auto* dense_result=static_cast<const float*>(out.contents);
+  double dense_energy=0;
+  for(size_t i=0;i<n;i++)
+   dense_energy+=dense_result[i*4]+dense_result[i*4+1]+dense_result[i*4+2];
+  if(!std::isfinite(dense_energy)||dense_energy<=0)return 49;
+  std::cout<<"METAL_DENSE_HAZE_GPU_PASSED energy="<<dense_energy<<"\n";
+  view.haze_footprint=1;
   std::vector<float> bright(n*4,0.f);
   for(int y=20;y<24;y++)for(int x=40;x<44;x++){
    const size_t i=(size_t(y)*w+x)*4;
