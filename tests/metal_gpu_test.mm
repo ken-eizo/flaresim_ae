@@ -410,7 +410,7 @@ int main(){
     std::cout<<"METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY"
              <<" CPU_relL1="<<cpu_rel<<" Metal_relL1="<<metal_rel
              <<" original_energy="<<gold_total<<"\n";
-    if(metal_rel>.015)return 103;
+    if(metal_rel>.001)return 103;
     std::cout<<"METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY_PASSED\n";
   }
   // Simulate independent AE MFR callbacks on one host-owned Metal device.

@@ -60,6 +60,24 @@ installed. Its SHA-256 and source provenance are verified by
 RGB result and directly compares **each pixel** to original Nuke.
 This test does not use the AE CPU image as its reference.
 
+### Native Metal validation (development CI run 39075064841)
+
+On the checked-in **unmodified Nuke** RGB32f reference (256×144),
+the GPU renderer produced the following independent pixel-space errors:
+
+| macOS GPU CI environment | Metal relative L1 error |
+| --- | ---: |
+| macOS 15, Apple Silicon virtual device | 0.000202779 (0.0203%) |
+| macOS 15, Intel / paravirtual graphics | 0.000182784 (0.0183%) |
+| macOS 26, Apple Silicon virtual device | 0.000202779 (0.0203%) |
+| macOS 14 | GPU device unavailable; **not tested on GPU** |
+
+The suite also reopens the **packaged** `.metallib` and runs the original
+Nuke golden test after extracting the ZIP. The test threshold is
+**0.1% relative L1** (`0.001`), rather than the former 1.5%.
+These are virtual CI devices: **physical Apple Silicon, Intel/AMD discrete
+graphics and AE inside-host tests remain outstanding**.
+
 ## Remaining fidelity gaps — do not claim full parity yet
 
 | Stage | What "same settings" requires | Current limitation / evidence |
