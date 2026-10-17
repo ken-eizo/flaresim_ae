@@ -100,6 +100,9 @@ else()
  find_package(Python3 COMPONENTS Interpreter QUIET)
 endif()
 if(Python3_Interpreter_FOUND)
+add_test(NAME FlareLensPristineNukeSourceAndGolden
+ COMMAND "${Python3_EXECUTABLE}"
+ "${CMAKE_CURRENT_SOURCE_DIR}/tests/reference/verify_pristine_sources.py")
 set(FLARE_MAC_EMBED_CPP "${FLARE_GEN_DIR}/FlareLensEmbeddedMac.cpp")
 add_custom_command(OUTPUT "${FLARE_MAC_EMBED_CPP}"
  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/embed_lenses_mac.py"

@@ -75,35 +75,33 @@ inline float fresnel_reflectance(float cos_i, float n1, float n2)
 // coating_n : coating refractive index (e.g. MgF2 = 1.38)
 // d_nm      : physical coating thickness in nm
 // lambda_nm : light wavelength in nm
-// Unpolarized thin-film interference: calculate independent s and p
-// amplitude coefficients, then average reflected intensities. The earlier
-// single-polarization approximation overstated off-axis reflections.
 inline float coating_reflectance(float cos_i, float n1, float n2,
                                  float coating_n, float d_nm, float lambda_nm)
 {
-    cos_i = std::clamp(std::abs(cos_i), 0.f, 1.f);
-    if (!(n1>0&&n2>0&&coating_n>0&&lambda_nm>0))
-        return 0.f;
-    const float sin2_i = std::max(0.f, 1.f-cos_i*cos_i);
-    const float sin2_c = (n1/coating_n)*(n1/coating_n)*sin2_i;
-    const float sin2_s = (n1/n2)*(n1/n2)*sin2_i;
-    if (sin2_c >= 1.f || sin2_s >= 1.f)
-        return fresnel_reflectance(cos_i,n1,n2);
-    const float cc = std::sqrt(std::max(0.f,1.f-sin2_c));
-    const float cs = std::sqrt(std::max(0.f,1.f-sin2_s));
-    const float phase = 4.f*float(M_PI)*coating_n*d_nm*cc/lambda_nm;
-    const float cphase = std::cos(phase);
-    // Real non-absorbing dielectric admittances, s and p independently.
-    const auto intensity=[&](float a,float b){
-        const float aa=a*a,bb=b*b,cross=2.f*a*b*cphase;
-        const float denom=1.f+aa*bb+cross;
-        return denom>1e-20f?std::clamp((aa+bb+cross)/denom,0.f,1.f):1.f;
-    };
-    const float r01s=(n1*cos_i-coating_n*cc)/(n1*cos_i+coating_n*cc);
-    const float r12s=(coating_n*cc-n2*cs)/(coating_n*cc+n2*cs);
-    const float r01p=(coating_n*cos_i-n1*cc)/(coating_n*cos_i+n1*cc);
-    const float r12p=(n2*cc-coating_n*cs)/(n2*cc+coating_n*cs);
-    return .5f*(intensity(r01s,r12s)+intensity(r01p,r12p));
+    // Snell into coating
+    float sin2_c = (n1 / coating_n) * (n1 / coating_n) * (1.0f - cos_i * cos_i);
+    if (sin2_c >= 1.0f)
+        return fresnel_reflectance(cos_i, n1, n2);
+    float cos_c = std::sqrt(1.0f - sin2_c);
+
+    // Phase thickness (double pass through the film)
+    float delta = 2.0f * (float)M_PI * coating_n * d_nm * cos_c / lambda_nm;
+
+    // Fresnel amplitude coefficients at each interface
+    float r01 = (n1 * cos_i - coating_n * cos_c) / (n1 * cos_i + coating_n * cos_c);
+
+    float sin2_2 = (coating_n / n2) * (coating_n / n2) * (1.0f - cos_c * cos_c);
+    if (sin2_2 >= 1.0f)
+        return fresnel_reflectance(cos_i, n1, n2);
+    float cos_2 = std::sqrt(1.0f - sin2_2);
+    float r12 = (coating_n * cos_c - n2 * cos_2) / (coating_n * cos_c + n2 * cos_2);
+
+    // Airy formula for total reflectance
+    float cos_2delta = std::cos(2.0f * delta);
+    float num = r01 * r01 + r12 * r12 + 2.0f * r01 * r12 * cos_2delta;
+    float den = 1.0f + r01 * r01 * r12 * r12 + 2.0f * r01 * r12 * cos_2delta;
+
+    return std::clamp(num / den, 0.0f, 1.0f);
 }
 
 // ---- Combined surface reflectance ---------------------------------------
@@ -123,10 +121,10 @@ inline float surface_reflectance(float cos_i, float n1, float n2,
 
     float R = coating_reflectance(cos_i, n1, n2, mgf2_n, qw_thickness, lambda_nm);
 
-    // Preserve the legacy multilayer approximation until real glass/coating
-    // prescriptions exist. A power of 2 avoids an O(layers) loop per ray.
-    if (coating_layers>1)
-        R=std::ldexp(R,-2*(std::min(coating_layers,32)-1));
+    // Multi-layer coatings give progressively lower reflectance
+    // (very rough approximation — real multi-layer stacks are more complex)
+    for (int i = 1; i < coating_layers; ++i)
+        R *= 0.25f;
 
     return std::clamp(R, 0.0f, 1.0f);
 }

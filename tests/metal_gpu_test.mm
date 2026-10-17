@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <thread>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <vector>
 int main(){
@@ -348,6 +349,70 @@ int main(){
   std::cout<<"METAL_TRANSPARENT_COMPOSITE_NOT_BLACK_PASSED"
            <<" rgb="<<visible_rgb<<" alpha="<<visible_alpha<<"\n";
 
+  // Independent Nuke ground truth. This is NOT fl::render_cpu's output:
+  // it was produced by an unmodified LocalStarlight Nuke CUDA executable
+  // from pinned commit 0e28ead, and checked into tests/reference.
+  {
+    constexpr int gw=256,gh=144;
+    constexpr size_t gn=size_t(gw)*gh;
+    const auto golden_path=std::filesystem::path(FLARELENS_TEST_SOURCE_DIR)/
+      "tests/reference/nuke-original-0e28ead-case0-256x144-rgb32f.bin";
+    std::ifstream gold(golden_path,std::ios::binary|std::ios::ate);
+    if(!gold||gold.tellg()!=std::streamoff(gn*3*sizeof(float)))return 95;
+    gold.seekg(0);
+    std::vector<float> expected(gn*3);
+    gold.read(reinterpret_cast<char*>(expected.data()),
+              std::streamsize(expected.size()*sizeof(float)));
+    if(!gold)return 96;
+    fl::Settings original_cfg{};
+    original_cfg.fov_h_deg=40.f;
+    original_cfg.gain=1000.f;
+    original_cfg.grid=24;
+    original_cfg.max_pairs=2048;
+    original_cfg.spectral_samples=3;
+    original_cfg.pupil_jitter=0;
+    original_cfg.jitter_seed=137;
+    original_cfg.aperture_blades=0;
+    const std::vector<fl::Source> original_sources{{.39f,.48f,300.f,140.f,75.f}};
+    const auto host_original=fl::render_cpu(lens,original_sources,original_cfg,gw,gh);
+    if(host_original.rgb.size()!=expected.size())return 97;
+    double gold_total=0,cpu_delta=0;
+    for(size_t i=0;i<expected.size();i++){
+      if(!std::isfinite(expected[i]))return 98;
+      gold_total+=std::abs(double(expected[i]));
+      cpu_delta+=std::abs(double(host_original.rgb[i])-expected[i]);
+    }
+    if(gold_total<1e-3||cpu_delta/gold_total>.001)return 99;
+    const size_t gold_scratch=fl::gpu::metal_scratch_bytes(
+      lens,1,original_cfg.grid,gw,gh,2,false,false,false);
+    auto gold_out=[dev newBufferWithLength:gn*16
+      options:MTLResourceStorageModeShared];
+    auto gold_memory=[dev newBufferWithLength:gold_scratch
+      options:MTLResourceStorageModePrivate];
+    if(!gold_out||!gold_memory)return 100;
+    fl::gpu::View gold_view{};
+    gold_view.input=nullptr;
+    gold_view.output=(__bridge void*)gold_out;
+    gold_view.width=gw;gold_view.height=gh;
+    gold_view.input_pitch_bytes=0;gold_view.output_pitch_bytes=gw*16;
+    gold_view.command_stream=(__bridge void*)queue;
+    gold_view.output_mode=2;
+    if(!fl::gpu::metal_compose(lens,original_sources,original_cfg,gold_view,
+         (__bridge void*)gold_memory,gold_scratch))return 101;
+    const auto* rendered=static_cast<const float*>(gold_out.contents);
+    double metal_delta=0;
+    for(size_t i=0;i<gn;i++)for(int c=0;c<3;c++){
+      const float actual=rendered[i*4+2-c];
+      if(!std::isfinite(actual))return 102;
+      metal_delta+=std::abs(double(actual)-expected[i*3+c]);
+    }
+    const double cpu_rel=cpu_delta/gold_total,metal_rel=metal_delta/gold_total;
+    std::cout<<"METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY"
+             <<" CPU_relL1="<<cpu_rel<<" Metal_relL1="<<metal_rel
+             <<" original_energy="<<gold_total<<"\n";
+    if(metal_rel>.001)return 103;
+    std::cout<<"METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY_PASSED\n";
+  }
   // Simulate independent AE MFR callbacks on one host-owned Metal device.
   // Each callback owns its queue, buffers and scratch; immutable pipelines
   // are intentionally shared through the backend's device-keyed cache.

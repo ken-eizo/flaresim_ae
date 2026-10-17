@@ -123,32 +123,26 @@ float d_fresnel_reflectance(float cos_i, float n1, float n2)
 // Single-layer MgF2 AR coating (mirrors coating_reflectance in fresnel.h)
 __device__ __forceinline__
 float d_coating_reflectance(float cos_i, float n1, float n2,
-                           float coating_n, float d_nm, float lambda_nm)
+                             float coating_n, float d_nm, float lambda_nm)
 {
-    cos_i=fminf(1.f,fmaxf(0.f,fabsf(cos_i)));
-    if(!(n1>0.f&&n2>0.f&&coating_n>0.f&&lambda_nm>0.f))
-        return 0.f;
-    const float sin2_i=fmaxf(0.f,1.f-cos_i*cos_i);
-    const float sin2_c=(n1/coating_n)*(n1/coating_n)*sin2_i;
-    const float sin2_s=(n1/n2)*(n1/n2)*sin2_i;
-    if(sin2_c>=1.f||sin2_s>=1.f)
-        return d_fresnel_reflectance(cos_i,n1,n2);
-    const float cc=sqrtf(fmaxf(0.f,1.f-sin2_c));
-    const float cs=sqrtf(fmaxf(0.f,1.f-sin2_s));
-    const float cos_phase=cosf(
-        12.56637061435917295f*coating_n*d_nm*cc/lambda_nm);
-    const float r01s=(n1*cos_i-coating_n*cc)/(n1*cos_i+coating_n*cc);
-    const float r12s=(coating_n*cc-n2*cs)/(coating_n*cc+n2*cs);
-    const float r01p=(coating_n*cos_i-n1*cc)/(coating_n*cos_i+n1*cc);
-    const float r12p=(n2*cc-coating_n*cs)/(n2*cc+coating_n*cs);
-    const float as=r01s*r01s,bs=r12s*r12s;
-    const float ap=r01p*r01p,bp=r12p*r12p;
-    const float xs=2.f*r01s*r12s*cos_phase;
-    const float xp=2.f*r01p*r12p*cos_phase;
-    const float ds=1.f+as*bs+xs,dp=1.f+ap*bp+xp;
-    const float rs=ds>1e-20f?fminf(1.f,fmaxf(0.f,(as+bs+xs)/ds)):1.f;
-    const float rp=dp>1e-20f?fminf(1.f,fmaxf(0.f,(ap+bp+xp)/dp)):1.f;
-    return .5f*(rs+rp);
+    float sin2_c = (n1/coating_n) * (n1/coating_n) * (1.0f - cos_i*cos_i);
+    if (sin2_c >= 1.0f) return d_fresnel_reflectance(cos_i, n1, n2);
+    float cos_c  = sqrtf(1.0f - sin2_c);
+
+    const float PI = 3.14159265358979323846f;
+    float delta  = 2.0f * PI * coating_n * d_nm * cos_c / lambda_nm;
+    float r01    = (n1*cos_i - coating_n*cos_c) / (n1*cos_i + coating_n*cos_c);
+
+    float sin2_2 = (coating_n/n2) * (coating_n/n2) * (1.0f - cos_c*cos_c);
+    if (sin2_2 >= 1.0f) return d_fresnel_reflectance(cos_i, n1, n2);
+    float cos_2  = sqrtf(1.0f - sin2_2);
+    float r12    = (coating_n*cos_c - n2*cos_2) / (coating_n*cos_c + n2*cos_2);
+
+    float cos_2d = cosf(2.0f * delta);
+    float num    = r01*r01 + r12*r12 + 2.0f*r01*r12*cos_2d;
+    float den    = 1.0f   + r01*r01*r12*r12 + 2.0f*r01*r12*cos_2d;
+    float R      = num / den;
+    return fminf(fmaxf(R, 0.0f), 1.0f);
 }
 
 __device__ __forceinline__
@@ -163,7 +157,7 @@ float d_surface_reflectance(float cos_i, float n1, float n2,
     const float design_lambda = 550.0f;
     float qw_thick            = design_lambda / (4.0f * mgf2_n);  // ~99.6 nm
     float R = d_coating_reflectance(cos_i, n1, n2, mgf2_n, qw_thick, lambda_nm);
-    if(coating_layers>1)R=ldexpf(R,-2*(min(coating_layers,32)-1));
+    for (int i = 1; i < coating_layers; ++i) R *= 0.25f;
     return fminf(fmaxf(R, 0.0f), 1.0f);
 }
 
