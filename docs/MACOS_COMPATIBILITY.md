@@ -52,6 +52,12 @@ Changes under test:
   resource retirement has been demonstrated.
 - Prevent advertising Metal GPU rendering when the backend rejects a frame
   for exceeding its hard per-image scratch bound.
+- Render Flare Only, Ghost Only, and Haze Only with a separate zero-plate
+  Metal kernel that does not bind an input world. A previously unconditional
+  source read could access an unbound `buffer(0)` on transparent/blank AE
+  layers; Composite and Sources Preview continue to require valid input.
+- Stress device-keyed pipeline caches with four parallel render threads,
+  each having its own GPU queue, scratch and host-style image buffers.
 
 Relevant local **AEIG** research chapters:
 - `docs/gpu-system/cross-platform-effect-architecture.md`: Adobe GPU
@@ -70,10 +76,15 @@ certify FlareSimAE.
    flags, Cocoa bundle executable, bundle contents and read-only resources.
 2. **Build:** x86_64 and arm64 slices; `vtool -show-build` minimum OS;
    compiled `.metallib` minimum OS; archive unpacks and preserves PiPL.
-3. **GPU:** M1-family Metal test must **execute**, not CTest-skip, all
-   composite, blur, preview, haze, detection and malformed-resource tests.
-   Intel runner separately compiles/checks the same binary; actual Intel
-   Metal operation must be proven when a hardware Metal GPU is accessible.
+3. **GPU:** Require an actual Metal device and execution of composite,
+   blur, preview, haze, detection, blank-input, invalid-resource and 4-thread
+   concurrent rendering tests. CTest **Skipped** is never counted as GPU
+   runtime proof. The macOS 15 Intel hosted runner did run the Metal kernels
+   successfully (CI `39037561670`); macOS 15 Apple Silicon also passed.
+   macOS 14's hosted runner (CI `39037857931`) reported **no Metal GPU**:
+   that particular CI leg provides build/ABI/bundle checks only. A working
+   physical Mac running Sonoma is still needed to establish actual Metal
+   runtime compatibility on macOS 14.
 4. **AE host:** independently install and run the plugin in AE 24.x/25.x/26.x,
    with at least one Apple Silicon and one Intel Mac. Test all five output
    modes at 32bpc, CPU fallback at 8/16/32bpc, MFR simultaneous frames,

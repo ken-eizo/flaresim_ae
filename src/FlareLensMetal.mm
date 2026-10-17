@@ -344,8 +344,10 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
   }
   return finish(cmd);
  }
- if(!encode(cmd,dev,@"fl_plate",pixels,{src,dst},&image,sizeof(image),2))
-  return false;
+ // Modes other than Composite are input-independent and must not read or
+ // bind a missing AE source world. The empty plate has no buffer(0) arg.
+ if(!encode(cmd,dev,v.output_mode==1?@"fl_plate":@"fl_plate_empty",
+     pixels,{src,dst},&image,sizeof(image),2))return false;
  if(sources.empty()||((settings.gain<=0||v.output_mode==5)&&
     (v.haze_gain<=0||v.output_mode==4)))return finish(cmd);
  if(!temp||scratch_size<bytes*2||temp.length<bytes*2)return false;

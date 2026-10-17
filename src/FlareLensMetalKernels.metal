@@ -80,8 +80,17 @@ kernel void fl_plate(
  uint tid [[thread_position_in_grid]]){
  if(tid>=a.width*a.height)return;
  const uint x=tid%a.width,y=tid/a.width;
- const float4 in=input[y*a.input_pitch+x];
- output[y*a.output_pitch+x]=a.mode==1?in:float4(0,0,0,1);
+ output[y*a.output_pitch+x]=input[y*a.input_pitch+x];
+}
+// A blank AE layer has no host input buffer. Avoid even declaring a source
+// binding for modes that synthesize an independent optical plate.
+kernel void fl_plate_empty(
+ device float4* output [[buffer(1)]],
+ constant FlImage& a [[buffer(2)]],
+ uint tid [[thread_position_in_grid]]){
+ if(tid>=a.width*a.height)return;
+ const uint x=tid%a.width,y=tid/a.width;
+ output[y*a.output_pitch+x]=float4(0,0,0,1);
 }
 // Source preview is O(pixels + sources*121), NOT O(pixels*sources).
 kernel void fl_preview_base(

@@ -212,6 +212,31 @@ int main(){
     break;
   }
   std::cout<<"METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED\n";
+  // AE may not provide any input GPU world for a blank solid. Flare-only,
+  // ghost-only and haze-only must not dereference an unbound Metal buffer.
+  view.input=nullptr;
+  view.haze_gain=0.f;
+  view.ghost_blur=0.f;
+  for(int mode:{2,4,5}){
+    view.output_mode=mode;
+    if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+         (__bridge void*)scratch,scratch_bytes))return 65+mode;
+    const float* blank=static_cast<const float*>(out.contents);
+    for(size_t i=0;i<n*4;i++)
+      if(!std::isfinite(blank[i]))return 70+mode;
+    if(mode==2||mode==4){
+      double energy=0;
+      for(size_t i=0;i<n;i++)
+        energy+=std::abs(blank[4*i])+std::abs(blank[4*i+1])+
+                std::abs(blank[4*i+2]);
+      if(energy<1e-7)return 75+mode;
+    }
+  }
+  view.output_mode=3;
+  if(fl::gpu::metal_compose(lens,sources,cfg,view,
+        (__bridge void*)scratch,scratch_bytes))return 79;
+  view.input=(__bridge void*)in;
+  std::cout<<"METAL_BLANK_INPUT_SOURCE_WORLD_PASSED\n";
   // Simulate independent AE MFR callbacks on one host-owned Metal device.
   // Each callback owns its queue, buffers and scratch; immutable pipelines
   // are intentionally shared through the backend's device-keyed cache.
