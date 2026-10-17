@@ -1,38 +1,29 @@
 # FlareSimAE
 
-**Physically based lens flares for Adobe After Effects.**
+An open-source, physically based lens flare plug-in for **Adobe After Effects**.
+Ported from [FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke).
 
-FlareSimAE is an open-source After Effects port of [FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke). It traces light through modeled lens surfaces to produce optical ghost reflections, with 1,370 lens prescriptions built in.
+FlareSimAE simulates lens reflections using optical ray tracing, with **1,370 built-in lens presets**.
 
-- **Windows:** NVIDIA CUDA GPU acceleration.
-- **macOS:** native Metal GPU acceleration (Universal arm64 / x86_64).
-- Both platforms support CPU fallback for features that do not yet run on the GPU.
+**Windows:** CUDA · **macOS:** Metal (Apple Silicon / Intel)
 
-## Download and install
+## Download
 
-**[Download the latest release](https://github.com/ken-eizo/flaresim_ae/releases/latest)** · **[Installation instructions](INSTALL.md)**
+**[Download FlareSimAE](https://github.com/ken-eizo/flaresim_ae/releases/latest)**
 
-> **macOS download notice (October 17, 2026):** The published **v1.0.3 macOS ZIP has a broken AE bundle/PiPL and may not appear in Effects & Presets**. A corrected **v1.0.4 test build** is available as a [GitHub Actions artifact](https://github.com/ken-eizo/flaresim_ae/actions/runs/38993870423/artifacts/12086655999). That artifact contains `FlareSimAE_macOS_CI.zip`; extract it, then install the `FlareSimAE.plugin` inside. The build passed automated Metal, PiPL, code-signing and ZIP checks; actual macOS After Effects loading still requires manual confirmation. Do not treat it as a formal v1.0.4 release.
+Extract the ZIP for your operating system, then install the included plug-in.
+See **[Installation](INSTALL.md)** for the short instructions.
 
-Download the ZIP for your operating system. Install only `FlareLensAE.aex` (Windows) or `FlareSimAE.plugin` (macOS) into your After Effects Plug-ins folder.
+## Use
 
-The macOS build is ad-hoc signed, not Apple-notarized. Its Metal GPU implementation has passed Apple GPU tests, but in-host After Effects operation on macOS has not yet been independently verified.
+Add **FlareSimAE** to a layer in After Effects. Select a lens, set a light position (or detect bright sources), and adjust the flare.
 
-## Quick start
+For all settings, see the [User Guide](docs/USER_GUIDE.md).
 
-1. Apply **FlareSimAE** to a layer.
-2. Select a lens using **Browse All Nuke Lenses**.
-3. For a manual light, adjust **Light Position** and **Manual Source Radiance**. Alternatively, use **Detect Bright Sources** to find highlights **in the effect's input layer**.
-4. Adjust **Flare Gain** and **Ray Grid** to control the result.
+## Credits
 
-CUDA and Metal accelerate **Composite**, **Flare Only**, **Sources Preview**, **Ghost Only**, and **Haze Only**. Diffraction/starburst and optical diagnostics still use CPU fallback.
+After Effects port: [ken-eizo](https://github.com/ken-eizo).
 
-For settings, diagnostics and performance advice, see the **[User Guide](docs/USER_GUIDE.md)**. Developer information is in **[docs/](docs/)**.
+Based on **FlareSim for Nuke** by [Steve Watts Kennedy (LocalStarlight)](https://github.com/LocalStarlight/flaresim_nuke), and the original optical renderer by [Eamonn Nugent (space55)](https://github.com/space55/blackhole-rt).
 
-## Credits and license
-
-Based on **[FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke)** by **Steve Watts Kennedy (LocalStarlight)**, built upon the optical rendering work of **Eamonn Nugent (space55)**: [blackhole-rt](https://github.com/space55/blackhole-rt).
-
-After Effects adaptation: [ken-eizo](https://github.com/ken-eizo).
-
-Released under the MIT License. See [LICENSE](LICENSE), [upstream/LICENSE](upstream/LICENSE), and [NOTICE.md](NOTICE.md). This is an unofficial adaptation, not endorsed by the upstream authors or Adobe.
+MIT licensed. See [LICENSE](LICENSE), [upstream/LICENSE](upstream/LICENSE), and [NOTICE.md](NOTICE.md).

@@ -9,6 +9,13 @@ on:
       - 'cmake/**'
       - 'src/**'
       - 'scripts/embed_lenses_mac.py'
+      - 'scripts/package_release.py'
+      - 'scripts/RELEASE_INSTALL.txt'
+      - 'README.md'
+      - 'INSTALL.md'
+      - 'LICENSE'
+      - 'NOTICE.md'
+      - 'upstream/LICENSE'
       - 'upstream/src/**'
       - 'upstream/lenses/lens_files/**'
       - 'tests/**'
@@ -103,22 +110,17 @@ jobs:
           xattr -cr "$plugin"
           codesign --force --deep --sign - "$plugin"
           codesign --verify --deep --strict --verbose=2 "$plugin"
-          staging="$RUNNER_TEMP/FlareSimAE_macOS_CI"
-          mkdir -p "$staging"
-          ditto "$plugin" "$staging/FlareSimAE.plugin"
-          cp README.md INSTALL.md NOTICE.md "$staging/"
-          cp LICENSE "$staging/LICENSE.txt"
-          cp upstream/LICENSE "$staging/LICENSE_UPSTREAM.txt"
-          ditto -c -k "$staging" "$RUNNER_TEMP/FlareSimAE_macOS_CI.zip"
-          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_macOS_CI.zip" >> "$GITHUB_ENV"
-          # Verify the downloadable ZIP, not only the build directory.
+          zip="$RUNNER_TEMP/FlareSimAE_v1.0.4_macOS.zip"
+          python3 scripts/package_release.py --platform macOS --version v1.0.4 --binary "$plugin" --output "$zip"
+          echo "FLARE_MAC_ZIP=$zip" >> "$GITHUB_ENV"
+          # Recheck the actual user download, not only the build directory.
           unpacked="$(mktemp -d)"
-          ditto -x -k "$RUNNER_TEMP/FlareSimAE_macOS_CI.zip" "$unpacked"
+          ditto -x -k "$zip" "$unpacked"
           python3 scripts/verify_mac_ae_bundle.py "$unpacked/FlareSimAE.plugin"
           codesign --verify --deep --strict --verbose=2 "$unpacked/FlareSimAE.plugin"
       - uses: actions/upload-artifact@v4
         with:
-          name: FlareSimAE-macOS-Metal-CI
+          name: FlareSimAE-v1.0.4-macOS-tested
           path: ${{ env.FLARE_MAC_ZIP }}
           if-no-files-found: error
           retention-days: 14

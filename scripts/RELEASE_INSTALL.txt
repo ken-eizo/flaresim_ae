@@ -1,0 +1,11 @@
+FlareSimAE v1.0.4 — Installation
+
+1. Quit Adobe After Effects.
+2. Windows: copy FlareLensAE.aex to the After Effects Support Files/Plug-ins folder.
+   macOS: copy FlareSimAE.plugin to the After Effects Plug-ins folder.
+3. Restart After Effects and search for FlareSimAE in Effects & Presets.
+
+Remove any older copy first. No separate lens files are needed.
+macOS is ad-hoc signed (not notarized); approve it only if you trust this download.
+
+Details: https://github.com/ken-eizo/flaresim_ae/blob/main/INSTALL.md
