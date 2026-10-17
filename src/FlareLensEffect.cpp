@@ -58,7 +58,7 @@ enum { P_INPUT=0,P_LIGHT,P_GAIN,P_GRID,P_FOV,P_THRESHOLD,P_AUTO,P_MAXSOURCES,
        P_MANUAL_RADIANCE,P_HOST_TRACE,P_ADAPTIVE_PREVIEW,P_MANUAL_DIAMETER,
        P_LENS_SOURCE,P_CATALOG_INDEX,P_CATALOG_BROWSE,
        P_CUSTOM_LENS,P_CUSTOM_CLONE,P_COUNT };
-constexpr auto kVersion=PF_VERSION(1,0,3,PF_Stage_RELEASE,0);
+constexpr auto kVersion=PF_VERSION(1,0,4,PF_Stage_RELEASE,0);
 #if defined(FLARELENS_HAVE_CUDA)
 constexpr auto kNativeGpuFramework=PF_GPU_Framework_CUDA;
 #elif defined(FLARELENS_HAVE_METAL)
@@ -1193,7 +1193,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
   switch(cmd){
    case PF_Cmd_ABOUT:
     std::snprintf(out->return_msg,sizeof(out->return_msg),
-      "FlareSimAE 1.0.3 / native CUDA/Metal SmartFX optical rendering");
+      "FlareSimAE 1.0.4 / native CUDA/Metal SmartFX optical rendering");
     return PF_Err_NONE;
    case PF_Cmd_GLOBAL_SETUP:
     out->my_version=kVersion;

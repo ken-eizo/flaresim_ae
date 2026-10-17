@@ -77,7 +77,7 @@ The result is `FlareSimAE.plugin`, containing `Contents/MacOS/FlareSimAE`,
 
 Extract the release ZIP, then place `FlareSimAE.plugin` in an After Effects
 plugin folder, such as
-`/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/`.
+`/Applications/Adobe After Effects <version>/Plug-ins/FlareSimAE/`.
 Quit AE before installing; avoid duplicate copies. For Metal acceleration,
 enable the host's Metal GPU renderer and use a supported 32-bpc SmartFX
 workflow. AE can choose CPU fallback for unsupported formats and modes.

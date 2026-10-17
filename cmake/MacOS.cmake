@@ -52,16 +52,28 @@ set_target_properties(FlareLensAE PROPERTIES
  PREFIX "" OUTPUT_NAME "FlareSimAE"
  BUNDLE TRUE BUNDLE_EXTENSION "plugin"
  CXX_VISIBILITY_PRESET default)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FlareSimAE.Info.plist.in"
+ "${FLARE_GEN_DIR}/FlareSimAE.Info.plist" @ONLY)
+file(WRITE "${FLARE_GEN_DIR}/FlareSimAE.PkgInfo" "eFKTFXTC")
+set_property(TARGET FlareLensAE APPEND PROPERTY LINK_DEPENDS
+ "${CMAKE_CURRENT_SOURCE_DIR}/src/FlareLensPiPL.r"
+ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FlareSimAE.Info.plist.in")
 target_compile_options(FlareLensAE PRIVATE
  $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
  $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 add_custom_command(TARGET FlareLensAE POST_BUILD
+ COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+  "${FLARE_GEN_DIR}/FlareSimAE.Info.plist"
+  "$<TARGET_BUNDLE_CONTENT_DIR:FlareLensAE>/Info.plist"
+ COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+  "${FLARE_GEN_DIR}/FlareSimAE.PkgInfo"
+  "$<TARGET_BUNDLE_CONTENT_DIR:FlareLensAE>/PkgInfo"
  COMMAND "${CMAKE_COMMAND}" -E make_directory
   "$<TARGET_BUNDLE_CONTENT_DIR:FlareLensAE>/Resources"
  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
   "${FLARE_METAL_LIBRARY}"
   "$<TARGET_BUNDLE_CONTENT_DIR:FlareLensAE>/Resources/FlareLensMetal.metallib"
- COMMAND "${FLARE_XCRUN}" Rez
+ COMMAND "${FLARE_XCRUN}" Rez -useDF
   -i "${AE_SDK_ROOT}/Headers"
   -i "${AE_SDK_ROOT}/Resources"
   -d AE_OS_MAC
