@@ -154,14 +154,19 @@ float luma(const fl::Source& s){return .2126f*s.r+.7152f*s.g+.0722f*s.b;}
 
 namespace fl::gpu {
 size_t metal_scratch_bytes(const LensSystem& lens,int count,int grid,int w,int h,
- int mode,bool,bool,bool) noexcept {
+ int mode,bool ghost_blur,bool dense_haze,bool) noexcept {
  if(count<1||count>2048||grid<2||grid>2048||w<1||h<1||
     w>16384||h>16384||lens.surfaces.size()<2||lens.surfaces.size()>64||
     mode<1||mode>5)return 0;
- if(mode==3)return 16;
  const size_t bytes=size_t(w)*size_t(h)*16;
  if(bytes>size_t(1024)*1024*1024)return 0;
- return bytes*2;
+ // Preview and analytic Haze Only never touch full-frame scratch.
+ // Retain a tiny nonzero allocation: the AE adapter treats zero as a
+ // failure/unsupported request when an optical source exists.
+ if(mode==3||(mode==5&&!dense_haze))return 16;
+ // Ray accumulation needs ONE image; blur needs a ping-pong second image.
+ // Dense haze uses two in its existing clearing/blur implementation.
+ return bytes*((ghost_blur||dense_haze)?2:1);
 }
 bool metal_zero(void* buffer,size_t bytes,void* command_queue){
  @autoreleasepool {
@@ -350,12 +355,21 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
      pixels,{src,dst},&image,sizeof(image),2))return false;
  if(sources.empty()||((settings.gain<=0||v.output_mode==5)&&
     (v.haze_gain<=0||v.output_mode==4)))return finish(cmd);
- if(!temp||scratch_size<bytes*2||temp.length<bytes*2)return false;
- id<MTLBlitCommandEncoder> clear=[cmd blitCommandEncoder];
- [clear fillBuffer:temp range:NSMakeRange(0,bytes*2) value:0];
- [clear endEncoding];
  const bool ghosts=settings.gain>0&&v.output_mode!=5;
  const bool haze=(v.output_mode==1||v.output_mode==2||v.output_mode==5)&&v.haze_gain>0;
+ const bool dense_haze=haze&&(sources.size()>8||v.haze_footprint>1);
+ const bool blurred_ghosts=ghosts&&v.ghost_blur>0&&v.ghost_blur_passes>0;
+ // Analytic haze writes straight to output: no image-sized scratch needed.
+ // An unblurred ghost trace needs one float4 image, not two. This matters
+ // on 8GB unified-memory Macs and with AE's concurrent MFR frames.
+ const size_t needed=(ghosts||dense_haze)?
+   bytes*((blurred_ghosts||dense_haze)?2:1):0;
+ if(needed){
+  if(!temp||scratch_size<needed||temp.length<needed)return false;
+  id<MTLBlitCommandEncoder> clear=[cmd blitCommandEncoder];
+  [clear fillBuffer:temp range:NSMakeRange(0,needed) value:0];
+  [clear endEncoding];
+ }
  if(ghosts){
   const auto pairs_storage=fl::cached_pairs(lens,sx,sy);
   std::vector<Pair> pairs;

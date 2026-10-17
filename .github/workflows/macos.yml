@@ -116,6 +116,7 @@ jobs:
           else
             grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_BLANK_INPUT_SOURCE_WORLD_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_MINIMAL_SCRATCH_ALLOCATIONS_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
           fi
       - name: Check native bundle and architectures

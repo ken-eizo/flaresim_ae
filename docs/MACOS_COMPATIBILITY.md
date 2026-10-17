@@ -58,6 +58,11 @@ Changes under test:
   layers; Composite and Sources Preview continue to require valid input.
 - Stress device-keyed pipeline caches with four parallel render threads,
   each having its own GPU queue, scratch and host-style image buffers.
+- On memory-constrained Macs, allocate only one full RGBA32F scratch image
+  for unblurred ghosts (previously two); allocate only a 16-byte sentinel
+  for preview and analytic Haze Only. Keep two images when blur or dense
+  haze requires ping-pong storage. Verify output against the CPU reference
+  with exactly the smaller allocation, not only with oversized scratch.
 
 Relevant local **AEIG** research chapters:
 - `docs/gpu-system/cross-platform-effect-architecture.md`: Adobe GPU

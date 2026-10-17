@@ -237,6 +237,56 @@ int main(){
         (__bridge void*)scratch,scratch_bytes))return 79;
   view.input=(__bridge void*)in;
   std::cout<<"METAL_BLANK_INPUT_SOURCE_WORLD_PASSED\n";
+  // Exact GPU scratch requirements: preserve output while removing one
+  // entire RGBA32F frame from common unblurred/analytic render modes.
+  const size_t one_image=bytes;
+  const size_t single_ghost=fl::gpu::metal_scratch_bytes(
+    lens,1,cfg.grid,w,h,2,false,false,false);
+  if(single_ghost!=one_image)return 80;
+  const size_t blurred_ghost=fl::gpu::metal_scratch_bytes(
+    lens,1,cfg.grid,w,h,2,true,false,false);
+  if(blurred_ghost!=2*one_image)return 81;
+  const size_t analytic_haze=fl::gpu::metal_scratch_bytes(
+    lens,1,cfg.grid,w,h,5,false,false,true);
+  if(analytic_haze!=16)return 82;
+  const size_t dense_haze=fl::gpu::metal_scratch_bytes(
+    lens,12,cfg.grid,w,h,5,false,true,false);
+  if(dense_haze!=2*one_image)return 83;
+  auto one_image_buffer=[dev newBufferWithLength:single_ghost
+      options:MTLResourceStorageModePrivate];
+  auto tiny_buffer=[dev newBufferWithLength:analytic_haze
+      options:MTLResourceStorageModePrivate];
+  if(!one_image_buffer||!tiny_buffer)return 84;
+  view.input=nullptr;
+  view.output_mode=2;
+  view.haze_gain=0.f;
+  view.ghost_blur=0.f;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+      (__bridge void*)one_image_buffer,single_ghost))return 85;
+  auto ghost_only=static_cast<const float*>(out.contents);
+  double ghost_energy=0;
+  for(size_t i=0;i<n;i++)
+    ghost_energy+=std::abs(ghost_only[i*4])+
+                 std::abs(ghost_only[i*4+1])+
+                 std::abs(ghost_only[i*4+2]);
+  if(!(ghost_energy>1e-7))return 86;
+  view.output_mode=5;
+  view.haze_gain=8.f;
+  view.haze_radius=.1f;
+  view.haze_passes=3;
+  view.haze_footprint=1;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+      (__bridge void*)tiny_buffer,analytic_haze))return 87;
+  const float* haze_only=static_cast<const float*>(out.contents);
+  double haze_only_energy=0;
+  for(size_t i=0;i<n;i++)
+    haze_only_energy+=std::abs(haze_only[i*4])+
+                      std::abs(haze_only[i*4+1])+
+                      std::abs(haze_only[i*4+2]);
+  if(!(haze_only_energy>1e-7))return 88;
+  view.input=(__bridge void*)in;
+  view.haze_gain=0.f;
+  std::cout<<"METAL_MINIMAL_SCRATCH_ALLOCATIONS_PASSED\n";
   // Simulate independent AE MFR callbacks on one host-owned Metal device.
   // Each callback owns its queue, buffers and scratch; immutable pipelines
   // are intentionally shared through the backend's device-keyed cache.
