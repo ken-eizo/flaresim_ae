@@ -84,12 +84,15 @@ certify FlareSimAE.
 3. **GPU:** Require an actual Metal device and execution of composite,
    blur, preview, haze, detection, blank-input, invalid-resource and 4-thread
    concurrent rendering tests. CTest **Skipped** is never counted as GPU
-   runtime proof. The macOS 15 Intel hosted runner did run the Metal kernels
-   successfully (CI `39037561670`); macOS 15 Apple Silicon also passed.
-   macOS 14's hosted runner (CI `39037857931`) reported **no Metal GPU**:
-   that particular CI leg provides build/ABI/bundle checks only. A working
-   physical Mac running Sonoma is still needed to establish actual Metal
-   runtime compatibility on macOS 14.
+   runtime proof. Both macOS 15 arm64 and x86_64 hosted runners executed
+   the Metal kernels successfully (CI `39038302118`). **These runners are
+   virtualized:** arm64 reports `Apple M1 (Virtual)`; x86_64 reports
+   `Apple Paravirtualized Graphics Device`. This confirms MSL execution
+   under both CPU ABIs, **not** performance or reliability on all physical
+   Intel/AMD/Apple Silicon GPUs. macOS 14's hosted runner (CI `39037857931`)
+   reported **no Metal GPU**: its CI leg only verifies compilation, ABI,
+   PiPL and bundle/signing. A physical Sonoma Mac and dedicated Intel/AMD
+   devices are still required for full native GPU runtime qualification.
 4. **AE host:** independently install and run the plugin in AE 24.x/25.x/26.x,
    with at least one Apple Silicon and one Intel Mac. Test all five output
    modes at 32bpc, CPU fallback at 8/16/32bpc, MFR simultaneous frames,

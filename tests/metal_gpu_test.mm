@@ -34,8 +34,11 @@ int main(){
   const std::vector<fl::Source> sources{{.56f,.44f,1.8f,.8f,.6f}};
   fl::Settings cfg;
   cfg.gain=2000;cfg.max_pairs=16;cfg.grid=12;cfg.spectral_samples=3;
+  // The shared fixture later turns ghost blur on. The real AE adapter
+  // computes scratch for each parameter snapshot; reserve the maximum here
+  // and test the minimal per-mode sizes separately below.
   const size_t scratch_bytes=fl::gpu::metal_scratch_bytes(
-    lens,1,cfg.grid,w,h,1,false,false,false);
+    lens,1,cfg.grid,w,h,1,true,false,false);
   auto scratch=[dev newBufferWithLength:scratch_bytes
       options:MTLResourceStorageModePrivate];
   if(!scratch)return 5;
