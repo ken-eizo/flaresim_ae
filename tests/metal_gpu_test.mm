@@ -137,6 +137,79 @@ int main(){
   if(found.empty()||std::abs(found[0].x-42.f/w)>.02f||
      std::abs(found[0].y-22.f/h)>.03f)return 45;
   std::cout<<"METAL_GPU_RAYTRACE_BLUR_HAZE_PREVIEW_DETECTION_PASSED\n";
+  // Fail closed before a GPU dispatch when AE supplies a short or otherwise
+  // invalid host-owned buffer, rather than reading out of bounds in Metal.
+  auto short_input=[dev newBufferWithLength:16
+      options:MTLResourceStorageModeShared];
+  if(!short_input)return 50;
+  view.input=(__bridge void*)short_input;
+  view.output_mode=1;
+  view.haze_gain=0.f;
+  if(fl::gpu::metal_compose(lens,sources,cfg,view,
+      (__bridge void*)scratch,scratch_bytes))return 51;
+  view.input=(__bridge void*)in;
+  view.output_pitch_bytes=w*16-1;
+  if(fl::gpu::metal_compose(lens,sources,cfg,view,
+      (__bridge void*)scratch,scratch_bytes))return 52;
+  view.output_pitch_bytes=w*16;
+  if(fl::gpu::metal_zero((__bridge void*)short_input,32,
+      (__bridge void*)queue))return 53;
+  if(fl::gpu::metal_zero((__bridge void*)short_input,3,
+      (__bridge void*)queue))return 54;
+  // Detector validates full input allocation and stride before encoding.
+  if(fl::gpu::detect_sources_metal((__bridge void*)short_input,
+      (__bridge void*)detect_scratch,detect_bytes,
+      (__bridge void*)queue,detect,found))return 55;
+  detect.input_pitch_bytes=w*16+1;
+  if(fl::gpu::detect_sources_metal((__bridge void*)in,
+      (__bridge void*)detect_scratch,detect_bytes,
+      (__bridge void*)queue,detect,found))return 56;
+  detect.input_pitch_bytes=w*16;
+
+  // Expand an optical tile beyond the sensor: destination padding must be
+  // transparent and valid pixels must map back to their origin exactly.
+  constexpr int sw=4,sh=3,ow=6,oh=5;
+  std::vector<float> source_tile(size_t(sw)*sh*4,0.f);
+  for(int y=0;y<sh;y++)for(int x=0;x<sw;x++)
+    source_tile[(size_t(y)*sw+x)*4]=float(1+y*sw+x);
+  auto region_src=[dev newBufferWithBytes:source_tile.data()
+      length:source_tile.size()*sizeof(float)
+      options:MTLResourceStorageModeShared];
+  auto region_dst=[dev newBufferWithLength:size_t(ow)*oh*16
+      options:MTLResourceStorageModeShared];
+  if(!region_src||!region_dst)return 57;
+  if(!fl::gpu::metal_copy_region((__bridge void*)region_src,
+      (__bridge void*)region_dst,(__bridge void*)queue,
+      sw*16,ow*16,0,0,sw,sh,-1,-1,ow,oh,true))return 58;
+  auto region=static_cast<const float*>(region_dst.contents);
+  for(int y=0;y<oh;y++)for(int x=0;x<ow;x++){
+    const float expected=(x>=1&&x<=sw&&y>=1&&y<=sh)
+        ?float((y-1)*sw+x):0.f;
+    if(std::abs(region[(size_t(y)*ow+x)*4]-expected)>1e-6f)
+      return 59;
+  }
+  if(fl::gpu::metal_copy_region((__bridge void*)region_src,
+      (__bridge void*)region_dst,(__bridge void*)queue,
+      sw*16,ow*16,0,0,sw,sh,0,0,2,2,false))return 60;
+  if(fl::gpu::metal_copy_region((__bridge void*)region_src,
+      (__bridge void*)region_dst,(__bridge void*)queue,
+      sw*16,ow*16,0,0,sw,sh,1,1,ow,oh,false))return 61;
+
+  // A multi-GPU Intel host may change its active Metal device. Never use
+  // resource objects from one GPU on a command queue from another.
+  for(id<MTLDevice> other in MTLCopyAllDevices()){
+    if(other==dev)continue;
+    auto other_queue=[other newCommandQueue];
+    if(!other_queue)continue;
+    if(fl::gpu::metal_zero((__bridge void*)in,16,
+        (__bridge void*)other_queue))return 62;
+    view.command_stream=(__bridge void*)other_queue;
+    if(fl::gpu::metal_compose(lens,sources,cfg,view,
+        (__bridge void*)scratch,scratch_bytes))return 63;
+    view.command_stream=(__bridge void*)queue;
+    break;
+  }
+  std::cout<<"METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED\n";
   return 0;
  }
 }

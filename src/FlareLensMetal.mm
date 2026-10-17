@@ -119,8 +119,14 @@ bool encode(id<MTLCommandBuffer> cmd,id<MTLDevice> device,NSString* name,
  return true;
 }
 bool finish(id<MTLCommandBuffer> cmd){
+ if(!cmd)return false;
  [cmd commit];[cmd waitUntilCompleted];
  return cmd.status==MTLCommandBufferStatusCompleted;
+}
+// The AE Metal device and its GPU worlds belong to the host. Never encode
+// a buffer from a different device (possible on multi-GPU Intel Macs).
+bool same_device(id<MTLBuffer> buffer,id<MTLDevice> device){
+ return !buffer||[buffer device]==device;
 }
 std::vector<float> haze_profile(int n,int center,int radius,int passes){
  std::vector<float> v(size_t(n),0.f),next(size_t(n),0.f);
@@ -158,21 +164,34 @@ size_t metal_scratch_bytes(const LensSystem& lens,int count,int grid,int w,int h
  return bytes*2;
 }
 bool metal_zero(void* buffer,size_t bytes,void* command_queue){
+ @autoreleasepool {
  id<MTLBuffer> dst=(__bridge id<MTLBuffer>)buffer;
  id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)command_queue;
- if(!dst||!queue||bytes>dst.length)return false;
+ if(!dst||!queue||!same_device(dst,queue.device)||
+    !bytes||bytes%4||bytes>dst.length)return false;
  id<MTLCommandBuffer> cmd=[queue commandBuffer];
  id<MTLBlitCommandEncoder> blit=[cmd blitCommandEncoder];
  [blit fillBuffer:dst range:NSMakeRange(0,bytes) value:0];
  [blit endEncoding];return finish(cmd);
+ }
 }
 bool metal_copy_region(void* source,void* destination,void* command_queue,
  size_t src_pitch,size_t dst_pitch,int left,int top,int right,int bottom,
  int origin_x,int origin_y,int output_width,int output_height,bool padded){
+ @autoreleasepool {
  id<MTLBuffer> src=(__bridge id<MTLBuffer>)source;
  id<MTLBuffer> dst=(__bridge id<MTLBuffer>)destination;
  id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)command_queue;
- if(!src||!dst||!queue||right<=left||bottom<=top)return false;
+ if(!src||!dst||!queue||!same_device(src,queue.device)||
+    !same_device(dst,queue.device))return false;
+ // Coordinates can be negative for AE's expanded tile requests. Validate
+ // signed endpoints before converting to unsigned GPU buffer offsets.
+ if(left<0||top<0||right<=left||bottom<=top||
+    output_width<1||output_height<1||
+    int64_t(left)<origin_x||int64_t(top)<origin_y||
+    int64_t(right)>int64_t(origin_x)+output_width||
+    int64_t(bottom)>int64_t(origin_y)+output_height||
+    !src_pitch||!dst_pitch||src_pitch%16||dst_pitch%16)return false;
  const size_t row=size_t(right-left)*16;
  const size_t dst_row=size_t(output_width)*16;
  if(dst_pitch<dst_row||src_pitch<size_t(right)*16)return false;
@@ -189,17 +208,22 @@ bool metal_copy_region(void* source,void* destination,void* command_queue,
       toBuffer:dst destinationOffset:dst_offset size:row];
  }
  [blit endEncoding];return finish(cmd);
+ }
 }
 bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
  void* queue_raw,const DetectionSettings& s,std::vector<fl::Source>& result){
+ @autoreleasepool {
  result.clear();
  if(!input)return true;
  id<MTLBuffer> src=(__bridge id<MTLBuffer>)input;
  id<MTLBuffer> gpu=(__bridge id<MTLBuffer>)scratch;
  id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)queue_raw;
- if(!src||!gpu||!queue)return false;
+ if(!src||!gpu||!queue||!same_device(src,queue.device)||
+    !same_device(gpu,queue.device))return false;
  const int step=std::clamp(s.scan_step,1,32),w=s.width,h=s.height;
- if(w<=0||h<=0||w>16384||h>16384||s.input_pitch_bytes<w*16)return false;
+ if(w<=0||h<=0||w>16384||h>16384||
+    s.input_pitch_bytes<w*16||s.input_pitch_bytes%16||
+    size_t(s.input_pitch_bytes)*size_t(h)>src.length)return false;
  const int dw=std::max(1,w/step),dh=std::max(1,h/step);
  const size_t bytes=size_t(dw)*dh*16;
  if(bytes>scratch_size||bytes>gpu.length)return false;
@@ -218,6 +242,7 @@ bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
  [blit endEncoding];
  if(!finish(cmd))return false;
  const auto* blocks=static_cast<const PixelFloat4*>(readback.contents);
+ if(!blocks)return false;
  const int max_sources=std::clamp(s.max_sources,1,2048);
  const int limit=s.cluster_radius>0?std::min(8192,max_sources*4):max_sources;
  std::priority_queue<Candidate,std::vector<Candidate>,Better> best;
@@ -266,16 +291,21 @@ bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
   }
  }
  return true;
+ }
 }
 bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
  const Settings& settings,const View& v,void* scratch,size_t scratch_size){
+ @autoreleasepool {
  id<MTLCommandQueue> queue=(__bridge id<MTLCommandQueue>)v.command_stream;
  id<MTLBuffer> src=(__bridge id<MTLBuffer>)v.input;
  id<MTLBuffer> dst=(__bridge id<MTLBuffer>)v.output;
  id<MTLBuffer> temp=(__bridge id<MTLBuffer>)scratch;
- if(!queue||!dst||v.width<1||v.height<1||v.width>16384||v.height>16384||
+ if(!queue||!dst||!same_device(src,queue.device)||
+    !same_device(dst,queue.device)||!same_device(temp,queue.device)||
+    v.width<1||v.height<1||v.width>16384||v.height>16384||
     v.output_pitch_bytes<v.width*16||v.output_pitch_bytes%16||
-    (v.output_mode==1&&(!src||v.input_pitch_bytes<v.width*16))||
+    (src&&(v.input_pitch_bytes<v.width*16||v.input_pitch_bytes%16))||
+    ((v.output_mode==1||v.output_mode==3)&&!src)||
     v.output_mode<1||v.output_mode>5)return false;
  const int w=v.width,h=v.height;
  const size_t pixels=size_t(w)*h,bytes=pixels*16;
@@ -435,5 +465,6 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
  if(v.output_mode==1&&!encode(cmd,dev,@"fl_alpha",pixels,
    {src,dst},&image,sizeof(image),2))return false;
  return finish(cmd);
+ }
 }
 } // namespace fl::gpu

@@ -1,6 +1,16 @@
 # Native macOS AE plugin with Metal optical renderer.
 # Proprietary Adobe SDK input must be supplied outside repository.
 enable_language(OBJCXX)
+# The Metal offline compiler does NOT automatically inherit the CMake
+# deployment target. Without an explicit minimum its metallib can require
+# the build runner OS and fail to load on earlier supported AE/macOS pairs.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+ set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Oldest supported macOS" FORCE)
+endif()
+if(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "11.0")
+ message(FATAL_ERROR "FlareSimAE requires macOS 11 or newer")
+endif()
+message(STATUS "FlareSimAE universal macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 find_library(FLARE_COCOA Cocoa REQUIRED)
 find_library(FLARE_METAL Metal REQUIRED)
 find_library(FLARE_FOUNDATION Foundation REQUIRED)
@@ -19,6 +29,8 @@ add_custom_command(OUTPUT "${FLARE_METAL_PHYSICS}"
  VERBATIM)
 add_custom_command(OUTPUT "${FLARE_METAL_AIR}"
  COMMAND "${FLARE_XCRUN}" -sdk macosx metal
+  "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+  -std=macos-metal2.3
   -I "${FLARE_GEN_DIR}" -c
   "${CMAKE_CURRENT_SOURCE_DIR}/src/FlareLensMetalKernels.metal"
   -o "${FLARE_METAL_AIR}"

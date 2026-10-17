@@ -842,8 +842,18 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  // for every normal expanded request in AE even when CUDA was available.
  const bool gpu_geometry=visible.right>visible.left&&
                          visible.bottom>visible.top;
+#ifdef FLARELENS_HAVE_METAL
+ // The Metal scratch allocator deliberately rejects >1GiB per full image.
+ // Never advertise GPU rendering for a frame the backend will reject:
+ // otherwise AE dispatches a doomed GPU render instead of its CPU path.
+ const bool gpu_memory_eligible=full.right>0&&full.bottom>0&&
+   size_t(full.right)*size_t(full.bottom)<=
+     (size_t(1024)*1024*1024/16);
+#else
+ const bool gpu_memory_eligible=true;
+#endif
  const bool can_gpu=extra->input->what_gpu==kNativeGpuFramework&&
-   detectable&&gpu_output&&args.star_gain<=0&&
+   detectable&&gpu_output&&args.star_gain<=0&&gpu_memory_eligible&&
    valid_scale&&gpu_geometry&&full.right>0&&full.bottom>0&&
    in->width<=16384&&in->height<=16384;
  if(can_gpu)extra->output->flags|=PF_RenderOutputFlag_GPU_RENDER_POSSIBLE;

@@ -2,7 +2,7 @@ name: macOS build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev/macos-compatibility-audit]
     paths:
       - '.github/workflows/macos.yml'
       - 'CMakeLists.txt'
@@ -39,11 +39,15 @@ jobs:
         run: ctest --test-dir build-macos-core --output-on-failure --parallel 3
 
   ae-plugin:
-    name: macOS native AE plugin (Metal)
+    name: Mac AE + Metal (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
     # SDK is restored from encrypted Actions secrets; no proprietary SDK
     # content is committed or published in CI artifacts.
-    runs-on: macos-15
-    timeout-minutes: 50
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     env:
       AE_SDK_CHUNK_00: ${{ secrets.AE_SDK_MAC_00 }}
       AE_SDK_CHUNK_01: ${{ secrets.AE_SDK_MAC_01 }}
@@ -72,6 +76,14 @@ jobs:
       AE_SDK_MANIFEST: ${{ secrets.AE_SDK_MAC_MANIFEST }}
     steps:
       - uses: actions/checkout@v4
+      - name: Record actual OS, CPU and Metal support
+        shell: bash
+        run: |
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string || true
+          system_profiler SPDisplaysDataType | head -100
+          xcrun --find metal
       - name: Restore private Adobe SDK (encrypted Actions secrets)
         shell: bash
         run: |
@@ -89,7 +101,17 @@ jobs:
         shell: bash
         run: |
           cmake --build build-macos-ae --target FlareLensMetalGpuTest --parallel 3
-          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure --verbose
+          set -o pipefail
+          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure --verbose | tee "$RUNNER_TEMP/metal-test.log"
+          # A skipped GPU test is not evidence of working Metal kernels.
+          # The Apple Silicon runner must actually run the kernels.
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"
+          else
+            if ! grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"; then
+              echo "::notice::Intel runner has no accessible Metal GPU: native Intel binary was compiled, but Intel GPU execution remains unverified"
+            fi
+          fi
       - name: Check native bundle and architectures
         shell: bash
         run: |
@@ -99,6 +121,8 @@ jobs:
           binary="$plugin/Contents/MacOS/FlareSimAE"
           test -f "$binary"
           file "$binary"
+          vtool -show-build "$binary"
+          vtool -show-build "$binary" | grep -q 'minos 11.0'
           archs="$(lipo -archs "$binary")"
           [[ " $archs " == *" arm64 "* ]] || { echo "::error::Missing arm64 slice"; exit 1; }
           [[ " $archs " == *" x86_64 "* ]] || { echo "::error::Missing x86_64 slice"; exit 1; }
@@ -120,7 +144,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$unpacked/FlareSimAE.plugin"
       - uses: actions/upload-artifact@v4
         with:
-          name: FlareSimAE-v1.0.4-macOS-tested
+          name: FlareSimAE-macOS-development-${{ matrix.os }}
           path: ${{ env.FLARE_MAC_ZIP }}
           if-no-files-found: error
           retention-days: 14
