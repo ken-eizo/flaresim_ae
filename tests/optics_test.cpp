@@ -27,9 +27,10 @@ int main(){
    if(a[i].u*a[i].u+a[i].v*a[i].v>1.000001f)return 6;
   }
  }
- // Independent complex-amplitude thin-film transfer-function check.
- // s and p amplitudes diverge at oblique incidence. Normal incidence
- // alone cannot detect an incorrectly polarized-only model.
+ // Nuke-original compatibility baseline, NOT a revised physical model.
+ // Original FlareSim treats thin-film reflection as one interference
+ // amplitude; keep it identical even when a more physical s/p average
+ // would produce a different result.
  const float film_n=1.38f,glass_n=1.517f,film_d=550.f/(4.f*film_n);
  for(const float angle:{0.f,35.f,55.f,75.f}){
   for(const float wavelength:{450.f,550.f,650.f}){
@@ -37,16 +38,15 @@ int main(){
    const float si2=1.f-ci*ci;
    const float cc=std::sqrt(1.f-si2/(film_n*film_n));
    const float cs=std::sqrt(1.f-si2/(glass_n*glass_n));
-   const auto rs01=(ci-film_n*cc)/(ci+film_n*cc);
-   const auto rs12=(film_n*cc-glass_n*cs)/(film_n*cc+glass_n*cs);
-   const auto rp01=(film_n*ci-cc)/(film_n*ci+cc);
-   const auto rp12=(glass_n*cc-film_n*cs)/(glass_n*cc+film_n*cs);
+   // Mirror the unmodified original's scalar Airy interference model.
+   // Calculate the reference by the independent complex-amplitude route.
+   const auto r01=(ci-film_n*cc)/(ci+film_n*cc);
+   const float sin2_2=(film_n/glass_n)*(film_n/glass_n)*(1.f-cc*cc);
+   const float cos2=std::sqrt(1.f-sin2_2);
+   const auto r12=(film_n*cc-glass_n*cos2)/(film_n*cc+glass_n*cos2);
    const auto phase=std::polar(1.f,
      4.f*3.14159265358979323846f*film_n*film_d*cc/wavelength);
-   const auto intensity=[&](float a,float b){
-    return std::norm((a+b*phase)/(1.f+a*b*phase));
-   };
-   const float reference=.5f*(intensity(rs01,rs12)+intensity(rp01,rp12));
+   const float reference=std::norm((r01+r12*phase)/(1.f+r01*r12*phase));
    const float actual=coating_reflectance(ci,1.f,glass_n,film_n,film_d,wavelength);
    if(!std::isfinite(actual)||std::fabs(actual-reference)>3e-6f){
     std::cerr<<"thin film s/p parity mismatch angle="<<angle

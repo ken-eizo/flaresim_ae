@@ -1,7 +1,8 @@
-// Independently compare the AE-native CUDA/CPU implementations against the
-// separately launched upstream CUDA transport with the same corrected
-// s/p thin-film physics. This no longer claims pixel parity with unmodified
-// original Nuke code; geometry and scatter remain independently exercised.
+// Compare AE-native CUDA and CPU numerically against the TRUE unmodified
+// LocalStarlight/flaresim_nuke CUDA renderer. Keep independent executables,
+// original thin-film coating physics, immutable original lens prescriptions
+// and a pixel-space HDR float reference; never compare two AE implementations
+// to each other and call the result upstream parity.
 #include "upstream_fixture_cases.hpp"
 #include "FlareLensGpuBridge.hpp"
 #include <cuda_runtime.h>
@@ -80,12 +81,12 @@ int main(){
   // A black reference does not establish parity. At least half the cases
   // must produce energy and pass the scale-independent numeric error test.
   if(total>1e-7)checked++;
-  if((total>1e-7&&(rel_gpu>.015||rel_cpu>.035))||
+  if((total>1e-7&&(rel_gpu>.00001||rel_cpu>.001))||
      (total<=1e-7&&(diff_gpu>1e-6||diff_cpu>1e-6))){cleanup();return 10;}
  }
  cleanup();
  if(checked<int(all.size()/2))return 11;
- std::cout<<"CORRECTED_UPSTREAM_CUDA_TRANSPORT_PARITY_OK nonzero_cases="<<checked
+ std::cout<<"UNMODIFIED_NUKE_CUDA_GPU_CPU_REFERENCE_PARITY_OK nonzero_cases="<<checked
           <<" total_cases="<<all.size()<<"\n";
  return 0;
 }
