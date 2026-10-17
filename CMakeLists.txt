@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 if(WIN32)
- project(FlareLensAE VERSION 1.0.4 LANGUAGES C CXX RC)
+ project(FlareLensAE VERSION 1.0.5 LANGUAGES C CXX RC)
 else()
- project(FlareLensAE VERSION 1.0.4 LANGUAGES C CXX)
+ project(FlareLensAE VERSION 1.0.5 LANGUAGES C CXX)
 endif()
 set(CMAKE_CXX_STANDARD 20)
 # CUDA static runtime needs the same CRT as the native AE plugin objects.

@@ -143,8 +143,8 @@ jobs:
           xattr -cr "$plugin"
           codesign --force --deep --sign - "$plugin"
           codesign --verify --deep --strict --verbose=2 "$plugin"
-          zip="$RUNNER_TEMP/FlareSimAE_v1.0.4_macOS.zip"
-          python3 scripts/package_release.py --platform macOS --version v1.0.4 --binary "$plugin" --output "$zip"
+          zip="$RUNNER_TEMP/FlareSimAE_v1.0.5_macOS.zip"
+          python3 scripts/package_release.py --platform macOS --version v1.0.5 --binary "$plugin" --output "$zip"
           echo "FLARE_MAC_ZIP=$zip" >> "$GITHUB_ENV"
           # Recheck the actual user download, not only the build directory.
           unpacked="$(mktemp -d)"
