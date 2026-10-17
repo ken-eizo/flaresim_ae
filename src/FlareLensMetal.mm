@@ -3,6 +3,8 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include "FlareLensGpuBridge.hpp"
+#include "FlareLensNukeSources.hpp"
+#include "FlareLensNukeHaze.hpp"
 #include "FlareLensGpuDetection.hpp"
 #include "FlareLensOptics.hpp"
 #include "lens.h"
@@ -34,7 +36,7 @@ struct PixelFloat4 {float x,y,z,w;};
 struct Blur {uint32_t w,h,radius;};
 struct Haze {uint32_t w,h,pitch,count;float gain;};
 struct Detect {uint32_t w,h,pitch,step,dw,dh;float threshold,cap;uint32_t gate;};
-struct Seed {int32_t x,y;float b,g,r;};
+struct Seed {int32_t x0,y0,x1,y1;float b,g,r;};
 struct SeedInfo {uint32_t w,h,footprint,count;};
 static_assert(sizeof(Trace)==68 && sizeof(Light)==32 && sizeof(Detect)==36);
 
@@ -155,7 +157,7 @@ float luma(const fl::Source& s){return .2126f*s.r+.7152f*s.g+.0722f*s.b;}
 namespace fl::gpu {
 size_t metal_scratch_bytes(const LensSystem& lens,int count,int grid,int w,int h,
  int mode,bool ghost_blur,bool dense_haze,bool) noexcept {
- if(count<1||count>2048||grid<2||grid>2048||w<1||h<1||
+ if(count<1||count>1000000||grid<2||grid>2048||w<1||h<1||
     w>16384||h>16384||lens.surfaces.size()<2||lens.surfaces.size()>64||
     mode<1||mode>5)return 0;
  const size_t bytes=size_t(w)*size_t(h)*16;
@@ -216,7 +218,8 @@ bool metal_copy_region(void* source,void* destination,void* command_queue,
  }
 }
 bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
- void* queue_raw,const DetectionSettings& s,std::vector<fl::Source>& result){
+ void* queue_raw,const DetectionSettings& s,std::vector<fl::Source>& result,
+ std::vector<fl::Source>* raw_sources){
  @autoreleasepool {
  result.clear();
  if(!input)return true;
@@ -249,52 +252,20 @@ bool detect_sources_metal(const void* input,void* scratch,size_t scratch_size,
  const auto* blocks=static_cast<const PixelFloat4*>(readback.contents);
  if(!blocks)return false;
  const int max_sources=std::clamp(s.max_sources,1,2048);
- const int limit=s.cluster_radius>0?std::min(8192,max_sources*4):max_sources;
- std::priority_queue<Candidate,std::vector<Candidate>,Better> best;
+ std::vector<fl::Source> raw;
+ raw.reserve(std::min<size_t>(size_t(dw)*dh,4096));
  for(size_t i=0;i<size_t(dw)*dh;i++){
   const auto v=blocks[i];
   if(v.w<0||!std::isfinite(v.w))continue;
   const int bx=int(i%dw),by=int(i/dw),x=bx*step,y=by*step;
   const float cx=.5f*(x+std::min(w,x+step));
   const float cy=.5f*(y+std::min(h,y+step));
-  Candidate candidate{v.w,int(i),{cx/float(w),cy/float(h),
-      v.x*s.tint_r,v.y*s.tint_g,v.z*s.tint_b}};
-  if(int(best.size())<limit)best.push(candidate);
-  else if(Better{}(candidate,best.top())){best.pop();best.push(candidate);}
+  raw.push_back({cx/float(w),cy/float(h),
+     v.x*s.tint_r,v.y*s.tint_g,v.z*s.tint_b});
  }
- std::vector<Candidate> ranked;
- while(!best.empty()){ranked.push_back(best.top());best.pop();}
- std::sort(ranked.begin(),ranked.end(),Better{});
- for(const auto& item:ranked)result.push_back(item.source);
- if(s.cluster_radius>0&&result.size()>1){
-  const float radius2=float(s.cluster_radius)*s.cluster_radius;
-  std::vector<fl::Source> clustered;
-  std::vector<uint8_t> consumed(result.size(),0);
-  for(size_t i=0;i<result.size();i++){
-   if(consumed[i])continue;
-   auto src=result[i];
-   float weight=std::max(0.f,luma(src));
-   float cx=src.x*weight,cy=src.y*weight;
-   for(size_t j=i+1;j<result.size();j++){
-    if(consumed[j])continue;
-    const float dx=(result[j].x-result[i].x)*w;
-    const float dy=(result[j].y-result[i].y)*h;
-    if(dx*dx+dy*dy>radius2)continue;
-    const float wt=std::max(0.f,luma(result[j]));
-    weight+=wt;cx+=result[j].x*wt;cy+=result[j].y*wt;
-    src.r+=result[j].r;src.g+=result[j].g;src.b+=result[j].b;
-    consumed[j]=1;
-   }
-   if(weight>0){src.x=cx/weight;src.y=cy/weight;}
-   clustered.push_back(src);
-  }
-  result.swap(clustered);
-  if(result.size()>size_t(max_sources)){
-   std::stable_sort(result.begin(),result.end(),
-      [](const auto&a,const auto&b){return luma(a)>luma(b);});
-   result.resize(max_sources);
-  }
- }
+ if(raw_sources)*raw_sources=raw;
+ result=fl::nuke_select_sources(std::move(raw),w,h,
+   s.fov_h_deg,s.fov_v_deg,s.cluster_radius,max_sources);
  return true;
  }
 }
@@ -317,6 +288,7 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
  if(size_t(v.output_pitch_bytes)*h>dst.length)return false;
  if(src&&size_t(v.input_pitch_bytes)*h>src.length)return false;
  auto dev=queue.device;
+ const auto& haze_sources=v.haze_sources?*v.haze_sources:sources;
  std::vector<Light> lights;
  lights.reserve(sources.size());
  const float fov=std::clamp(settings.fov_h_deg,1.f,150.f)*.0174532925199433f;
@@ -355,9 +327,10 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
      pixels,{src,dst},&image,sizeof(image),2))return false;
  if(sources.empty()||((settings.gain<=0||v.output_mode==5)&&
     (v.haze_gain<=0||v.output_mode==4)))return finish(cmd);
- const bool ghosts=settings.gain>0&&v.output_mode!=5;
- const bool haze=(v.output_mode==1||v.output_mode==2||v.output_mode==5)&&v.haze_gain>0;
- const bool dense_haze=haze&&(sources.size()>8||v.haze_footprint>1);
+ const bool ghosts=settings.gain>0&&v.output_mode!=5&&!sources.empty();
+ const bool haze=(v.output_mode==1||v.output_mode==2||v.output_mode==5)&&
+   v.haze_gain>0&&!haze_sources.empty();
+ const bool dense_haze=haze&&(haze_sources.size()>8||v.haze_footprint>1);
  const bool blurred_ghosts=ghosts&&v.ghost_blur>0&&v.ghost_blur_passes>0;
  // Analytic haze writes straight to output: no image-sized scratch needed.
  // An unblurred ghost trace needs one float4 image, not two. This matters
@@ -433,11 +406,13 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
   const int radius=int(std::round(std::clamp(v.haze_radius,0.f,1.f)*
                                   std::hypot(float(w),float(h))));
   const int passes=std::clamp(v.haze_passes,1,6);
-  const bool dense=sources.size()>8||v.haze_footprint>1;
+  const bool dense=haze_sources.size()>8||v.haze_footprint>1;
   if(dense){
    std::vector<Seed> seeds;
-   for(const auto& s:sources)
-    seeds.push_back({int(s.x*w),int(s.y*h),s.b,s.g,s.r});
+   for(const auto& s:haze_sources){
+    const auto rect=fl::nuke_haze_rect(s,w,h,v.haze_footprint);
+    seeds.push_back({rect.x0,rect.y0,rect.x1,rect.y1,s.b,s.g,s.r});
+   }
    auto seed_gpu=upload(dev,seeds.data(),seeds.size()*sizeof(Seed));
    if(!seed_gpu)return false;
    id<MTLBlitCommandEncoder> blit=[cmd blitCommandEncoder];
@@ -464,7 +439,7 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
     return false;
   }else{
    std::vector<float> hx,hy;
-   for(const auto& s:sources){
+   for(const auto& s:haze_sources){
     auto x=haze_profile(w,int(s.x*w),radius,passes);
     auto y=haze_profile(h,int(s.y*h),radius,passes);
     hx.insert(hx.end(),x.begin(),x.end());
@@ -472,10 +447,17 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
    }
    auto x_gpu=upload(dev,hx.data(),hx.size()*sizeof(float));
    auto y_gpu=upload(dev,hy.data(),hy.size()*sizeof(float));
+   std::vector<Light> raw_lights;
+   raw_lights.reserve(haze_sources.size());
+   for(const auto& s:haze_sources)
+    raw_lights.push_back({0,0,s.r,s.g,s.b,0,0,0});
+   auto haze_light_gpu=upload(dev,raw_lights.data(),
+                                 raw_lights.size()*sizeof(Light));
    const Haze hz{uint32_t(w),uint32_t(h),uint32_t(v.output_pitch_bytes/16),
-                 uint32_t(sources.size()),v.haze_gain};
-   if(!x_gpu||!y_gpu||!encode(cmd,dev,@"fl_analytic_haze",pixels,
-      {light_gpu,x_gpu,y_gpu,dst},&hz,sizeof(hz),4))return false;
+                 uint32_t(haze_sources.size()),v.haze_gain};
+   if(!x_gpu||!y_gpu||!haze_light_gpu||
+      !encode(cmd,dev,@"fl_analytic_haze",pixels,
+      {haze_light_gpu,x_gpu,y_gpu,dst},&hz,sizeof(hz),4))return false;
   }
  }
  if(v.output_mode==1&&!encode(cmd,dev,@"fl_alpha",pixels,

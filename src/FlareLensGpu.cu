@@ -412,6 +412,7 @@ struct GPUSpectralSampleDev { float lambda, rw, gw, bw; };
 
 
 #include "FlareLensGpuBridge.hpp"
+#include "FlareLensNukeHaze.hpp"
 #include "FlareLensOptics.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -651,7 +652,7 @@ __global__ void flarelens_blur_cols_small(
  const float denom=1.f/(b-a+1);
  dst[size_t(y)*w+x]=make_float4(sb*denom,sg*denom,sr*denom,0);
 }
-struct GPUHazeSeed {int x,y;float b,g,r;};
+struct GPUHazeSeed {int x0,y0,x1,y1;float b,g,r;};
 // Seeding all HDR sources is one launch instead of one kernel launch per
 // source. Bright sources at the same pixel add physically to one field.
 __global__ void flarelens_scatter_haze(
@@ -659,13 +660,10 @@ __global__ void flarelens_scatter_haze(
  const int i=int(blockIdx.x)*256+int(threadIdx.x);
  if(i>=count)return;
  const GPUHazeSeed s=src[i];
- if(s.x<0||s.x>=w||s.y<0||s.y>=h)return;
- // Nuke's haze is a BLOCK fill, not a point splat. For 4x4 source
- // detection every accepted HDR block deposits 16 pixels' radiance.
- // This operation is independent from the expensive ghost Fresnel trace.
- const int f=max(1,min(footprint,32));
- for(int y=max(0,s.y-f/2);y<min(h,s.y+(f+1)/2);y++)
-  for(int x=max(0,s.x-f/2);x<min(w,s.x+(f+1)/2);x++){
+ if(s.x0<0||s.y0<0||s.x0>=s.x1||s.y0>=s.y1||
+    s.x1>w||s.y1>h)return;
+ for(int y=s.y0;y<s.y1;y++)
+  for(int x=s.x0;x<s.x1;x++){
    const size_t index=size_t(y)*w+x;
    atomicAdd(&photon[index].x,s.b);
    atomicAdd(&photon[index].y,s.g);
@@ -760,7 +758,7 @@ struct SyncOnExit {
 }
 size_t scratch_bytes(const LensSystem& lens,int sources,int grid,int w,int h,
                      int output_mode,bool need_blur,bool dense_haze,bool analytic_haze) noexcept {
- if(sources<1||sources>2048||grid<2||grid>2048||w<1||h<1||
+ if(sources<1||sources>1000000||grid<2||grid>2048||w<1||h<1||
     w>16384||h>16384||lens.surfaces.size()<2||lens.surfaces.size()>64||
     (output_mode!=1&&output_mode!=2&&output_mode!=3&&
      output_mode!=4&&output_mode!=5))return 0;
@@ -802,6 +800,7 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  // Keep pageable upload data alive until the CUDA stream has completed.
  std::vector<float> host_x,host_y;
  std::vector<GPUHazeSeed> host_seeds;
+ std::vector<GPUSource> haze_lights; // Keep pageable upload alive until host CUDA stream sync
  // On every early exit drain already queued commands before CPU upload
  // vectors are destroyed or AE device scratch is released.
  SyncOnExit sync{stream,true};
@@ -841,17 +840,18 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
   if(cudaPeekAtLastError()!=cudaSuccess)return false;
  }
  sync.pending=true;
- if(sources.empty())return sync.finish();
- const bool ghost_mode=v.output_mode!=5 && settings.gain>0;
+ const auto& haze_sources=v.haze_sources?*v.haze_sources:sources;
+ if(sources.empty()&&haze_sources.empty())return sync.finish();
+ const bool ghost_mode=v.output_mode!=5 && settings.gain>0&&!sources.empty();
  const bool haze_mode=(v.output_mode==1||v.output_mode==2||v.output_mode==5)
-                     &&v.haze_gain>0;
+                     &&v.haze_gain>0&&!haze_sources.empty();
  if(!ghost_mode&&!haze_mode)return sync.finish();
  const bool need_blur=ghost_mode&&v.ghost_blur>0&&v.ghost_blur_passes>0;
  // Dense multi-source haze: one sparse-seed pass followed by O(WH) box
  // convolution. The separable analytical solution is faster for <=8 lights
  // but O(num_sources*pixels) and not viable for 512 HDR emitters.
- const bool dense_haze=haze_mode&&(sources.size()>8||v.haze_footprint>1);
- const size_t need=scratch_bytes(lens,int(sources.size()),settings.grid,
+ const bool dense_haze=haze_mode&&(haze_sources.size()>8||v.haze_footprint>1);
+ const size_t need=scratch_bytes(lens,int(std::max(sources.size(),haze_sources.size())),settings.grid,
                                  w,h,v.output_mode,need_blur,dense_haze,
                                  haze_mode&&!dense_haze);
  if(!need||!scratch||scratch_size<need||lens.focal_length<=0)return false;
@@ -896,7 +896,7 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  auto* dp=reinterpret_cast<GPUPair*>(base);
  base+=align16(std::min<size_t>(2048,lens.surfaces.size()*lens.surfaces.size())*sizeof(GPUPair));
  auto* dl=reinterpret_cast<GPUSource*>(base);
- base+=align16(sources.size()*sizeof(GPUSource));
+ base+=align16(std::max(sources.size(),haze_sources.size())*sizeof(GPUSource));
  auto* dg=reinterpret_cast<GPUSample*>(base);
  base+=align16(size_t(settings.grid)*settings.grid*sizeof(GPUSample));
  auto* dw=reinterpret_cast<GPUSpectralSampleDev*>(base);
@@ -913,9 +913,9 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  // MiB per frame at high source counts.
  const bool analytic_haze=haze_mode&&!dense_haze;
  auto* haze_x=analytic_haze?reinterpret_cast<float*>(base):nullptr;
- if(analytic_haze)base+=align16(sources.size()*size_t(w)*sizeof(float));
+ if(analytic_haze)base+=align16(haze_sources.size()*size_t(w)*sizeof(float));
  auto* haze_y=analytic_haze?reinterpret_cast<float*>(base):nullptr;
- if(analytic_haze)base+=align16(sources.size()*size_t(h)*sizeof(float));
+ if(analytic_haze)base+=align16(haze_sources.size()*size_t(h)*sizeof(float));
  auto* haze_seeds=dense_haze?reinterpret_cast<GPUHazeSeed*>(base):nullptr;
  const auto upload=[&](void* dst,const void* data,size_t n){
   return cudaMemcpyAsync(dst,data,n,cudaMemcpyHostToDevice,stream)==cudaSuccess;
@@ -1022,15 +1022,17 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  if(haze_mode&&dense_haze){
   // Many Nuke HDR blocks: splat their RGB into a single full-resolution
   // texture and convolve once, NOT one outer product per source/pixel.
-  host_seeds.reserve(sources.size());
-  for(const auto& s:sources)
-    host_seeds.push_back({int(s.x*w),int(s.y*h),s.b,s.g,s.r});
+  host_seeds.reserve(haze_sources.size());
+  for(const auto& s:haze_sources){
+    const auto rect=fl::nuke_haze_rect(s,w,h,v.haze_footprint);
+    host_seeds.push_back({rect.x0,rect.y0,rect.x1,rect.y1,s.b,s.g,s.r});
+  }
   if(!upload(haze_seeds,host_seeds.data(),
              host_seeds.size()*sizeof(GPUHazeSeed)))return false;
   if(cudaMemsetAsync(photon,0,bytes,stream)!=cudaSuccess)return false;
-  const dim3 block(256),seed_grid((unsigned(sources.size())+255)/256);
+  const dim3 block(256),seed_grid((unsigned(haze_sources.size())+255)/256);
   flarelens_scatter_haze<<<seed_grid,block,0,stream>>>(
-    photon,w,h,haze_seeds,int(sources.size()),v.haze_footprint);
+    photon,w,h,haze_seeds,int(haze_sources.size()),v.haze_footprint);
   if(cudaPeekAtLastError()!=cudaSuccess)return false;
   const int radius=int(std::round(std::clamp(v.haze_radius,0.f,1.f)*
                                   std::hypot(float(w),float(h))));
@@ -1059,20 +1061,26 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
   const int radius=int(std::round(std::clamp(v.haze_radius,0.f,1.f)*
                                    std::hypot(float(w),float(h))));
   const int passes=std::clamp(v.haze_passes,1,6);
-  host_x.assign(size_t(w)*sources.size(),0.f);
-  host_y.assign(size_t(h)*sources.size(),0.f);
-  for(size_t s=0;s<sources.size();s++){
-   const auto x=haze_profile(w,int(sources[s].x*w),radius,passes);
-   const auto y=haze_profile(h,int(sources[s].y*h),radius,passes);
+  host_x.assign(size_t(w)*haze_sources.size(),0.f);
+  host_y.assign(size_t(h)*haze_sources.size(),0.f);
+  for(size_t s=0;s<haze_sources.size();s++){
+   const auto x=haze_profile(w,int(haze_sources[s].x*w),radius,passes);
+   const auto y=haze_profile(h,int(haze_sources[s].y*h),radius,passes);
    std::copy(x.begin(),x.end(),host_x.begin()+size_t(w)*s);
    std::copy(y.begin(),y.end(),host_y.begin()+size_t(h)*s);
   }
-  if(!upload(haze_x,host_x.data(),host_x.size()*sizeof(float))||
+  // Reuse the RGB source table only AFTER the optical trace has
+  // completed on the same host stream. Nuke haze uses raw, pre-cap tiles.
+  haze_lights.reserve(haze_sources.size());
+  for(const auto& s:haze_sources)
+   haze_lights.push_back({0.f,0.f,s.r,s.g,s.b,0.f,0.f,0.f});
+  if(!upload(dl,haze_lights.data(),haze_lights.size()*sizeof(GPUSource))||
+     !upload(haze_x,host_x.data(),host_x.size()*sizeof(float))||
      !upload(haze_y,host_y.data(),host_y.size()*sizeof(float)))return false;
   const dim3 block(256),grid_add((unsigned(npx)+255)/256);
   flarelens_add_analytic_haze<<<grid_add,block,0,stream>>>(
     static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h,dl,
-    haze_x,haze_y,int(sources.size()),v.haze_gain);
+    haze_x,haze_y,int(haze_sources.size()),v.haze_gain);
   if(cudaPeekAtLastError()!=cudaSuccess)return false;
  }
  if(v.output_mode==1){

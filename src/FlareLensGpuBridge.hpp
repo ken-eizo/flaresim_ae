@@ -15,6 +15,7 @@ struct View {
  float haze_gain=0.f;
  float haze_radius=.15f;
  int haze_passes=3;
+ const std::vector<Source>* haze_sources=nullptr; // Nuke haze sees all pre-cluster/cap tiles
  void* command_stream=nullptr; // PF_GPUDeviceInfo.command_queuePV (CUstream)
  int spectral_parallel=-1; // -1 auto, 0 serial, 1 parallel CUDA grid
  int haze_footprint=1; // Nuke fills each source block before haze convolution

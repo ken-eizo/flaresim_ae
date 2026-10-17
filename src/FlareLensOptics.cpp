@@ -1,4 +1,5 @@
 #include "FlareLensOptics.hpp"
+#include "FlareLensNukeHaze.hpp"
 #include "starburst.h"
 #include <algorithm>
 #include <array>
@@ -153,9 +154,9 @@ void render_haze(std::vector<float>& rgb,const std::vector<Source>& sources,int 
  rgb.assign(size_t(w)*h*3,0.f);
  const int footprint=std::clamp(source_footprint,1,32);
  for(const auto& s:sources){
-  const int cx=int(s.x*w),cy=int(s.y*h);
-  for(int y=std::max(0,cy-footprint/2);y<std::min(h,cy+(footprint+1)/2);y++)
-   for(int x=std::max(0,cx-footprint/2);x<std::min(w,cx+(footprint+1)/2);x++){
+  const auto rect=nuke_haze_rect(s,w,h,footprint);
+  for(int y=rect.y0;y<rect.y1;y++)
+   for(int x=rect.x0;x<rect.x1;x++){
     const size_t idx=(size_t(y)*w+x)*3;
     rgb[idx]+=s.r;rgb[idx+1]+=s.g;rgb[idx+2]+=s.b;
    }

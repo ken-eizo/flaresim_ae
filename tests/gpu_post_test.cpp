@@ -29,7 +29,7 @@ int main(){
  const auto lensfile=std::filesystem::path(__FILE__).parent_path().parent_path()/
     "upstream/lenses/lens_files/AI_Nikkor_50mm_F1.2S.lens";
  if(!lens.load(lensfile.string().c_str()))return 1;
- const std::array<Case,13> cases{{
+ const std::array<Case,14> cases{{
   {640,360,32,1,0,3,0,0,3},       // Unfiltered Nuke CUDA
   {640,360,32,2,6,7,0,0,3},       // Write photons directly to AE output
   {640,360,32,4,6,7,0,0,3},       // Ghost-only, zero scratch pixel frames
@@ -42,7 +42,8 @@ int main(){
   {320,180,12,1,6,7,.003f,1,3,-1,24}, // 24 sources: ghost plus dense Haze
   {640,360,12,5,6,7,.003f,1,3,-1,48}, // 48 HDR sources: dense Haze-only
   {320,180,12,5,6,7,.003f,1,3,-1,24,4}, // Nuke's whole 4x4 HDR blocks
-  {1920,1280,128,2,6,7,.003f,1,3} // High-quality screenshot conditions
+  {1920,1280,128,2,6,7,.003f,1,3}, // High-quality screenshot conditions
+  {127,91,12,5,0,3,0,2.5f,3,-1,1,4} // Haze from 48 raw blocks AFTER Max Sources 1
  }};
  const std::vector<fl::Source> source_one{{
   1450.f/1920.f,300.f/1280.f,30000,30000,30000
@@ -56,6 +57,7 @@ int main(){
   const std::vector<fl::Source> sources=c.num_sources==1?
    source_one:std::vector<fl::Source>(source_many.begin(),
                                      source_many.begin()+c.num_sources);
+  const auto& haze_sources=test==cases.size()-1?source_many:sources;
   const size_t pixels=size_t(c.w)*c.h;
   const size_t bytes=pixels*16;
   fl::Settings s{};
@@ -70,14 +72,15 @@ int main(){
   v.haze_radius=.15f;v.haze_passes=3;
   v.spectral_parallel=c.spectral_parallel;
   v.haze_footprint=c.haze_footprint;
+  v.haze_sources=&haze_sources;
   std::vector<float> bg(pixels*4,0);
   for(size_t i=0;i<pixels;i++)bg[i*4+3]=0; // fully transparent shape
   void* in=nullptr,*out=nullptr,*scratch=nullptr;
   const auto free_mem=[&](){if(in)cudaFree(in);if(out)cudaFree(out);
                             if(scratch)cudaFree(scratch);};
-  const bool dense_haze=c.haze>0&&(c.num_sources>8||c.haze_footprint>1)&&
+  const bool dense_haze=c.haze>0&&(haze_sources.size()>8||c.haze_footprint>1)&&
       (c.mode==1||c.mode==2||c.mode==5);
-  const auto size=fl::gpu::scratch_bytes(lens,int(sources.size()),
+  const auto size=fl::gpu::scratch_bytes(lens,int(std::max(sources.size(),haze_sources.size())),
        c.grid,c.w,c.h,c.mode,c.blur>0&&c.passes>0,dense_haze);
   if(cudaMalloc(&in,bytes)!=cudaSuccess||
      cudaMalloc(&out,bytes)!=cudaSuccess||
@@ -109,7 +112,7 @@ int main(){
   }
   if(c.haze>0&&(c.mode==1||c.mode==2||c.mode==5)){
    std::vector<float> haze;
-   fl::render_haze(haze,sources,c.w,c.h,c.haze,.15f,3,c.haze_footprint);
+   fl::render_haze(haze,haze_sources,c.w,c.h,c.haze,.15f,3,c.haze_footprint);
    if(haze.size()!=expected.size())return 7;
    for(size_t i=0;i<expected.size();i++)expected[i]+=haze[i];
   }

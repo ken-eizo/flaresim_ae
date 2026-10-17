@@ -1,4 +1,5 @@
 #include "FlareLensGpuDetection.hpp"
+#include "FlareLensNukeSources.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
@@ -77,7 +78,8 @@ size_t detection_scratch_bytes(int width,int height,int step) noexcept{
 }
 bool detect_sources_cuda(const void* input,void* device_scratch,
  size_t scratch_size,void* host_cuda_stream,const DetectionSettings& s,
- std::vector<fl::Source>& result){
+ std::vector<fl::Source>& result,
+ std::vector<fl::Source>* raw_sources){
  result.clear();
  if(!input)return true;
  const int step=std::clamp(s.scan_step,1,32);
@@ -101,9 +103,8 @@ bool detect_sources_cuda(const void* input,void* device_scratch,
  // immediately follows on this SAME host stream. No RGBA image readback.
  if(cudaStreamSynchronize(stream)!=cudaSuccess)return false;
  const int max_sources=std::clamp(s.max_sources,1,2048);
- const int candidate_limit=s.cluster_radius>0?
-    std::min(8192,max_sources*4):max_sources;
- std::priority_queue<Candidate,std::vector<Candidate>,Better> best;
+ std::vector<fl::Source> raw;
+ raw.reserve(std::min<size_t>(tile_count,4096));
  for(size_t i=0;i<tile_count;i++){
   const float4 v=blocks[i];
   if(v.w<0||!std::isfinite(v.w))continue;
@@ -111,50 +112,12 @@ bool detect_sources_cuda(const void* input,void* device_scratch,
   const int x=bx*step,y=by*step;
   const float cx=.5f*(x+std::min(w,x+step));
   const float cy=.5f*(y+std::min(h,y+step));
-  Candidate candidate{v.w,int(i),{cx/float(w),cy/float(h),
-   v.x*s.tint_r,v.y*s.tint_g,v.z*s.tint_b}};
-  if(int(best.size())<candidate_limit)best.push(candidate);
-  else if(Better{}(candidate,best.top())){best.pop();best.push(candidate);}
+  raw.push_back({cx/float(w),cy/float(h),
+    v.x*s.tint_r,v.y*s.tint_g,v.z*s.tint_b});
  }
- std::vector<Candidate> ranked;
- ranked.reserve(best.size());
- while(!best.empty()){ranked.push_back(best.top());best.pop();}
- std::sort(ranked.begin(),ranked.end(),Better{});
- result.reserve(ranked.size());
- for(const auto& candidate:ranked)result.push_back(candidate.source);
- if(s.cluster_radius>0&&result.size()>1){
-  const float r2=float(s.cluster_radius)*s.cluster_radius;
-  std::vector<fl::Source> clustered;
-  std::vector<uint8_t> consumed(result.size(),0);
-  clustered.reserve(result.size());
-  for(size_t i=0;i<result.size();i++){
-   if(consumed[i])continue;
-   auto source=result[i];
-   float weight=std::max(0.f,source_luma(source));
-   float cx=source.x*weight,cy=source.y*weight;
-   for(size_t j=i+1;j<result.size();j++){
-    if(consumed[j])continue;
-    const float dx=(result[j].x-result[i].x)*w;
-    const float dy=(result[j].y-result[i].y)*h;
-    if(dx*dx+dy*dy>r2)continue;
-    const float wj=std::max(0.f,source_luma(result[j]));
-    weight+=wj;
-    cx+=result[j].x*wj;cy+=result[j].y*wj;
-    source.r+=result[j].r;
-    source.g+=result[j].g;
-    source.b+=result[j].b;
-    consumed[j]=1;
-   }
-   if(weight>0){source.x=cx/weight;source.y=cy/weight;}
-   clustered.push_back(source);
-  }
-  result.swap(clustered);
-  if(result.size()>size_t(max_sources)){
-   std::stable_sort(result.begin(),result.end(),
-    [](const auto& a,const auto& b){return source_luma(a)>source_luma(b);});
-   result.resize(max_sources);
-  }
- }
+ if(raw_sources)*raw_sources=raw;
+ result=fl::nuke_select_sources(std::move(raw),w,h,
+   s.fov_h_deg,s.fov_v_deg,s.cluster_radius,max_sources);
  return true;
 }
 }

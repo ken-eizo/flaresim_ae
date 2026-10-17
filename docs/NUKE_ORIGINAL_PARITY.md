@@ -87,14 +87,61 @@ graphics and AE inside-host tests remain outstanding**.
 | Ghost pair eligibility | Same original `filter_ghost_pairs`, enabled surface pairs, ray grid | Original source shared and 36 standalone tests; user-specified individual pair masks need additional end-to-end coverage |
 | Spectral & coating | Same R/G/B spectral samples, IOR, thin-film formula, wavelengths | Restored and numerically verified in 36 CUDA/CPU tests; Metal golden case added |
 | Emission | Same scene-linear image RGB, source grouping, exposure/alpha | Nuke detects from input RGB; AE has an extra manual point/area source mode. Matching manual radiance is **not** equivalent to an arbitrary HDR source image |
-| Auto source detection | Same threshold, cap, binning, centroid and clustering, max sources | Logic adapted to AE buffer layouts. Full arbitrary HDR input images have not been compared pixel-by-pixel with actual Nuke host. |
+| Auto source detection | Same threshold, cap, binning, angular clustering, then max sources | Original unbounded pre-cluster candidate order, angular grouping and post-cluster Max Sources restored for CPU/CUDA/Metal. Independent Nuke-algorithm oracle and six real CUDA HDR tile tests pass. Actual Nuke Iop input/optional mask parity still not verified. |
 | Preview | Same source stride, compensation, jitter and per-frame seed | AE's adaptive preview/downsample policy is host-specific and may diverge |
 | Raster energy | Original Nuke conserves **total ray energy** in pixel splats | `Match FHD Flare Brightness` is AE-specific. **OFF** is required for Nuke-exact raster intensity; ON deliberately changes the result |
-| Haze / Ghost blur | Same source footprint, blur radius/passes and boundary convention | Upstream post routines reused or approximated; direct per-pixel Nuke/AE integrated comparison pending |
-| Starburst | Same original aperture PSF/FFT, wavelength, scale and gain | Original starburst core shared; host-side placement and summation parity not fully verified |
+| Haze / Ghost blur | Same pre-cluster source blocks, including full right/bottom remainder buckets; same blur radius/passes | Raw block list preserved independently of ghost clustering/cap. Original separable box-blur reference and GPU post tests cover 4x4 and uneven final tiles. Full actual Nuke Iop image parity still pending. |
+| Starburst | Same original aperture PSF/FFT, wavelength, scale and gain | Shared original starburst FFT and full 2D pixel output checked independently using identical source/FOV inputs (relative L1 ~2.5e-7); full upstream Iop pipeline end-to-end unverified. |
 | Output channels / alpha | Nuke `flare.rgb`, `source.rgb`, `haze.rgb`, `starburst.rgb` + configurable `rgba` | AE exposes single RGBA effect / modes. **Not** a direct one-to-one host-channel representation |
 | HDR precision | Scene-linear float Nuke output | AE 32bpc required for meaningful float32 comparisons; 8/16bpc quantize/clamp |
 | Mac host | Native Apple Silicon/Intel loader; AE command queues, resource ownership and MFR | CI Metal simulator/virtual GPU validated; **real AE 2023–2026 rendering and physical discrete AMD GPUs remain unverified** |
+
+## Full-pipeline source and post verification (October 18, 2026)
+
+The source of truth remains the **unmodified upstream implementation** at
+`0e28ead`. The AE port previously selected top-K candidates *before*
+clustering, used image-pixel distances instead of Nuke's angular distances,
+and supplied clustered/capped sources to Haze. All three are output-changing
+deviations, not benign optimizations.
+
+The new source-selection implementation preserves the complete scanned HDR
+tile list, runs Nuke's greedy angular-space clustering, and applies
+`Max Sources` only afterward. Haze separately consumes every original
+pre-cluster/pre-cap HDR block, including the full final remainder tile
+when width/height are not divisible by scan step. This applies to AE CPU,
+CUDA and Metal paths. No full RGBA image copy is needed for the GPU detector;
+only Nuke-style HDR tile summaries are transferred to the host.
+
+Tests:
+- `FlareLensNukeSourcePostParity`: independent original-algorithm oracle
+  for source angular clustering/cap order, raw-block Haze, original
+  separable variable-denominator blur and exact starburst PSF output.
+- `FlareLensGpuDetectionTest`: six real CUDA GPU cases, including FHD and
+  angular clustering with `Max Sources=4`, maximum per-source numeric error 0.
+- `FlareLensGpuPostTest`: source list capped at one for ghosts while Haze
+  uses 48 original raw sources; CUDA Haze RGB result matches CPU reference.
+- `FlareLensMetalGpuTest`: tests source detector pre-cluster metadata,
+  Haze-only last remainder block, and distinct raw-Haze vs capped-Ghost
+  input lists, plus independent pristine Nuke optical golden image.
+- Windows full test suite: **27/27 passed** on the current implementation.
+
+This establishes component-level mathematical parity, not Nuke-Iop-host
+end-to-end identity. Comparisons of unmodified Nuke's final `source.rgb`,
+`haze.rgb`, `starburst.rgb`, and named channel streams still require
+actual Nuke rendered outputs as golden images.
+
+### AE-specific behavior that must not silently replace Nuke
+
+The intended optical additions are **Golden Angle pupil sampling** and the
+**Light Position/manual emitter**. The current AE UX actually contains
+other behavioral differences inherited from previous versions:
+`Match FHD Flare Brightness` (deliberately changes photon energy when ON),
+adaptive preview/downsample, an input-alpha detection gate (Nuke instead
+has a separate mask input), the crosshair-based `Sources Preview`
+(instead of Nuke's RGB source-block map), and AE-style Composite alpha
+instead of arbitrary Nuke named channels. These cannot truthfully be called
+fully Nuke-identical yet. Preserve old project serialization and explicitly
+resolve these differences rather than deleting existing parameters.
 
 ## Release discipline
 

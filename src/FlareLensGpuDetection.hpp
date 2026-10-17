@@ -14,6 +14,7 @@ struct DetectionSettings {
  int max_sources=512;
  int cluster_radius=0;
  float source_threshold=2.f,source_cap=0.f;
+ float fov_h_deg=40.f,fov_v_deg=0.f;
  float tint_r=1.f,tint_g=1.f,tint_b=1.f;
  bool gate_alpha=false;
 };
@@ -26,5 +27,5 @@ size_t detection_scratch_bytes(int width,int height,int scan_step) noexcept;
 // Numeric comparator uses descending Nuke luma then ascending tile index.
 bool detect_sources_cuda(const void* input,void* device_scratch,
  size_t scratch_size,void* host_cuda_stream,const DetectionSettings& options,
- std::vector<fl::Source>& out);
+ std::vector<fl::Source>& out,std::vector<fl::Source>* raw_sources=nullptr);
 }

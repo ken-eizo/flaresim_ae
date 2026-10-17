@@ -1,6 +1,7 @@
 // Actual device-resident BGRA128 -> block summaries -> sorted HDR Nuke
 // sources. The CPU oracle does not call the GPU implementation.
 #include "FlareLensGpuDetection.hpp"
+#include "FlareLensNukeSources.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <array>
@@ -19,7 +20,7 @@ struct Better{
 std::vector<fl::Source> oracle(const std::vector<float4>& image,
  const fl::gpu::DetectionSettings& c){
  const int w=c.width,h=c.height,st=c.scan_step,dw=std::max(1,w/st),dh=std::max(1,h/st);
- std::priority_queue<Candidate,std::vector<Candidate>,Better> best;
+ std::vector<fl::Source> raw;
  for(int by=0;by<dh;by++)for(int bx=0;bx<dw;bx++){
   const int left=bx*st,top=by*st;
   const int right=bx==dw-1?w:std::min(w,left+st);
@@ -44,24 +45,17 @@ std::vector<fl::Source> oracle(const std::vector<float4>& image,
   if(score<c.source_threshold||!std::isfinite(score))continue;
   const float cx=.5f*(left+std::min(w,left+st));
   const float cy=.5f*(top+std::min(h,top+st));
-  Candidate cand{score,by*dw+bx,
-    {cx/w,cy/h,r*c.tint_r,g*c.tint_g,b*c.tint_b}};
-  if(int(best.size())<c.max_sources)best.push(cand);
-  else if(Better{}(cand,best.top())){best.pop();best.push(cand);}
+  raw.push_back({cx/w,cy/h,r*c.tint_r,g*c.tint_g,b*c.tint_b});
  }
- std::vector<Candidate> ranked;
- while(!best.empty()){ranked.push_back(best.top());best.pop();}
- std::sort(ranked.begin(),ranked.end(),Better{});
- std::vector<fl::Source> result;
- for(const auto& item:ranked)result.push_back(item.source);
- return result;
+ return fl::nuke_select_sources(std::move(raw),w,h,
+     c.fov_h_deg,c.fov_v_deg,c.cluster_radius,c.max_sources);
 }
 int main(){
  int count=0;
  if(cudaGetDeviceCount(&count)!=cudaSuccess||count==0)return 77;
  cudaStream_t stream{};
  if(cudaStreamCreateWithFlags(&stream,cudaStreamNonBlocking)!=cudaSuccess)return 1;
- for(int run=0;run<5;run++){
+ for(int run=0;run<6;run++){
   const int w=run==4?1920:127,h=run==4?1080:91;
   const int step=run==3?3:4;
   std::vector<float4> image(size_t(w)*h,make_float4(0,0,0,1));
@@ -78,7 +72,8 @@ int main(){
   }
   fl::gpu::DetectionSettings settings{};
   settings.width=w;settings.height=h;
-  settings.scan_step=step;settings.max_sources=run==4?512:128;
+  settings.cluster_radius=run==5?15:0;
+  settings.scan_step=step;settings.max_sources=run==4?512:run==5?4:128;
   settings.source_threshold=run==2?22.f:2.f;
   settings.source_cap=run==2?35.f:0.f;
   settings.gate_alpha=(run==1||run==3);

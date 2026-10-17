@@ -17,7 +17,8 @@ bool metal_copy_region(void* source,void* destination,void* command_queue,
  size_t src_pitch,size_t dst_pitch,int left,int top,int right,int bottom,
  int origin_x,int origin_y,int output_width,int output_height,bool padded);
 bool detect_sources_metal(const void*,void*,size_t,void*,
- const DetectionSettings&,std::vector<fl::Source>&);
+ const DetectionSettings&,std::vector<fl::Source>&,
+ std::vector<fl::Source>* raw_sources=nullptr);
 bool metal_compose(const LensSystem&,const std::vector<Source>&,
                    const Settings&,const View&,void*,size_t);
 }

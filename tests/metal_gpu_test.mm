@@ -4,6 +4,7 @@
 #include "FlareLensCore.hpp"
 #include "FlareLensSourceModel.hpp"
 #include "FlareLensOptics.hpp"
+#include "FlareLensNukeSources.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -125,6 +126,58 @@ int main(){
    dense_energy+=dense_result[i*4]+dense_result[i*4+1]+dense_result[i*4+2];
   if(!std::isfinite(dense_energy)||dense_energy<=0)return 49;
   std::cout<<"METAL_DENSE_HAZE_GPU_PASSED energy="<<dense_energy<<"\n";
+  // Nuke final floor-divided source tile absorbs right and bottom remainders.
+  // On 128x72 at stride 5 the final tile is 8x7, not 5x5.
+  {
+    const std::vector<fl::Source> edge_lights{
+       {122.5f/w,67.5f/h,5.f,3.f,2.f}};
+    view.output_mode=5;view.haze_footprint=5;
+    view.haze_gain=1.3f;view.haze_radius=0.f;view.haze_passes=1;
+    if(!fl::gpu::metal_compose(lens,edge_lights,cfg,view,
+         (__bridge void*)scratch,scratch_bytes))return 104;
+    std::vector<float> nuke_reference;
+    fl::render_haze(nuke_reference,edge_lights,w,h,1.3f,0.f,1,5);
+    const auto* m=static_cast<const float*>(out.contents);
+    double energy=0,difference=0;
+    for(size_t i=0;i<n;i++)for(int c=0;c<3;c++){
+      const double expected=nuke_reference[i*3+c];
+      const double actual=m[i*4+2-c];
+      if(!std::isfinite(actual))return 105;
+      difference+=std::abs(actual-expected);
+      energy+=std::abs(expected);
+    }
+    if(energy<1.f||difference/energy>1e-5)return 106;
+    std::cout<<"METAL_NUKE_HAZE_FINAL_REMAINDER_BLOCK_PARITY_PASSED"
+             <<" relL1="<<difference/energy<<"\n";
+    // Nuke uses every raw HDR detection tile for haze, even if only a
+    // single clustered or capped source survives for optical ghost rays.
+    // This exercises the separate pre-cluster metadata path on Metal.
+    std::vector<fl::Source> precluster;
+    for(int ty=0;ty<3;ty++)for(int tx=0;tx<5;tx++)
+      precluster.push_back({(20.f+tx*4+2)/w,(12.f+ty*4+2)/h,
+        6.f+tx,4.f+ty,2.f});
+    std::vector<fl::Source> capped{precluster[0]};
+    view.haze_sources=&precluster;
+    view.haze_footprint=4;view.haze_gain=1.6f;
+    view.haze_radius=.015f;view.haze_passes=2;
+    if(!fl::gpu::metal_compose(lens,capped,cfg,view,
+         (__bridge void*)scratch,scratch_bytes))return 110;
+    fl::render_haze(nuke_reference,precluster,w,h,1.6f,.015f,2,4);
+    m=static_cast<const float*>(out.contents);
+    double original_energy=0,original_difference=0;
+    for(size_t i=0;i<n;i++)for(int c=0;c<3;c++){
+      const double expected=nuke_reference[i*3+c];
+      const double actual=m[i*4+2-c];
+      if(!std::isfinite(actual))return 111;
+      original_energy+=std::abs(expected);
+      original_difference+=std::abs(actual-expected);
+    }
+    view.haze_sources=nullptr;
+    if(original_energy<1.f||original_difference/original_energy>.005)return 112;
+    std::cout<<"METAL_NUKE_RAW_PRECLUSTER_HAZE_PARITY_PASSED"
+             <<" relL1="<<original_difference/original_energy<<"\n";
+
+  }
   view.haze_footprint=1;
   std::vector<float> bright(n*4,0.f);
   for(int y=20;y<24;y++)for(int x=40;x<44;x++){
@@ -145,6 +198,49 @@ int main(){
   if(found.empty()||std::abs(found[0].x-42.f/w)>.02f||
      std::abs(found[0].y-22.f/h)>.03f)return 45;
   std::cout<<"METAL_GPU_RAYTRACE_BLUR_HAZE_PREVIEW_DETECTION_PASSED\n";
+  // Nuke clusters all qualifying HDR tiles BEFORE applying Max Sources.
+  // Exercise the real Metal detector with >4 candidates, not just a marker.
+  {
+    std::vector<float> mosaic(n*4,0.f);
+    std::vector<fl::Source> raw_expected;
+    for(int ty=0;ty<3;ty++)for(int tx=0;tx<8;tx++){
+      const int x0=20+tx*4,y0=12+ty*4;
+      const float r=7.f+ty*2+tx*.25f,g=3.f+tx*.5f,b=2.f+ty*.3f;
+      raw_expected.push_back({(x0+2.f)/w,(y0+2.f)/h,r,g,b});
+      for(int yy=y0;yy<y0+4;yy++)for(int xx=x0;xx<x0+4;xx++){
+       const size_t k=(size_t(yy)*w+xx)*4;
+       mosaic[k]=b;mosaic[k+1]=g;mosaic[k+2]=r;mosaic[k+3]=1;
+      }
+    }
+    std::memcpy(in.contents,mosaic.data(),bytes);
+    auto c=detect;
+    c.scan_step=4;c.max_sources=4;c.cluster_radius=10;
+    c.source_cap=0;c.source_threshold=2.f;
+    c.fov_h_deg=40.f;c.fov_v_deg=0.f;c.gate_alpha=false;
+    std::vector<fl::Source> metal_raw,metal_final;
+    if(!fl::gpu::detect_sources_metal((__bridge void*)in,
+      (__bridge void*)detect_scratch,detect_bytes,(__bridge void*)queue,
+      c,metal_final,&metal_raw))return 107;
+    const auto expected=fl::nuke_select_sources(raw_expected,w,h,
+      40.f,0.f,10,4);
+    if(metal_raw.size()!=raw_expected.size()||
+       metal_final.size()!=expected.size())return 108;
+    double deviation=0;
+    const auto compare=[&](const fl::Source&a,const fl::Source&b){
+      deviation=std::max(deviation,double(std::abs(a.x-b.x)));
+      deviation=std::max(deviation,double(std::abs(a.y-b.y)));
+      deviation=std::max(deviation,double(std::abs(a.r-b.r)));
+      deviation=std::max(deviation,double(std::abs(a.g-b.g)));
+      deviation=std::max(deviation,double(std::abs(a.b-b.b)));
+    };
+    for(size_t i=0;i<metal_raw.size();i++)compare(metal_raw[i],raw_expected[i]);
+    for(size_t i=0;i<metal_final.size();i++)compare(metal_final[i],expected[i]);
+    if(deviation>1.e-4)return 109;
+    std::cout<<"METAL_NUKE_PRECLUSTER_SOURCE_DETECTION_PARITY_PASSED"
+             <<" raw="<<metal_raw.size()<<" final="<<metal_final.size()
+             <<" max_abs_error="<<deviation<<"\n";
+    std::memcpy(in.contents,bright.data(),bytes);
+  }
   // Fail closed before a GPU dispatch when AE supplies a short or otherwise
   // invalid host-owned buffer, rather than reading out of bounds in Metal.
   auto short_input=[dev newBufferWithLength:16

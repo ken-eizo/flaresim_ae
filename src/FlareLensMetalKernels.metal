@@ -15,7 +15,7 @@ struct FlImage { uint width,height,input_pitch,output_pitch,mode; float gain; };
 struct FlBlur {uint width,height,radius;};
 struct FlHaze {uint width,height,pitch,source_count;float gain;};
 struct FlDetect {uint width,height,pitch,step,dw,dh;float threshold,cap;uint gate;};
-struct FlSeed {int x,y;float b,g,r;};
+struct FlSeed {int x0,y0,x1,y1;float b,g,r;};
 struct FlSeedInfo {uint width,height,footprint,count;};
 inline void fl_atomic_add(device atomic_uint* p,float amount){
  if(!(amount>1.e-14f)||!isfinite(amount))return;
@@ -226,10 +226,10 @@ kernel void fl_seed_haze(
  uint tid [[thread_position_in_grid]]){
  if(tid>=a.count)return;
  const FlSeed s=seeds[tid];
- if(s.x<0||s.y<0||s.x>=int(a.width)||s.y>=int(a.height))return;
- const int f=int(clamp(a.footprint,1u,32u));
- for(int y=max(0,s.y-f/2);y<min(int(a.height),s.y+(f+1)/2);y++)
- for(int x=max(0,s.x-f/2);x<min(int(a.width),s.x+(f+1)/2);x++){
+ if(s.x0<0||s.y0<0||s.x0>=s.x1||s.y0>=s.y1||
+    s.x1>int(a.width)||s.y1>int(a.height))return;
+ for(int y=s.y0;y<s.y1;y++)
+ for(int x=s.x0;x<s.x1;x++){
   const uint i=(uint(y)*a.width+uint(x))*4;
   fl_atomic_add(photon+i,s.b);
   fl_atomic_add(photon+i+1,s.g);

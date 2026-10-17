@@ -2,7 +2,7 @@ name: macOS build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev/nuke-pipeline-parity]
     paths:
       - '.github/workflows/macos.yml'
       - 'CMakeLists.txt'
@@ -119,6 +119,9 @@ jobs:
             grep -q 'METAL_MINIMAL_SCRATCH_ALLOCATIONS_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_FHD_REFERENCE_EMISSION_SCALE_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_NUKE_PRECLUSTER_SOURCE_DETECTION_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_NUKE_HAZE_FINAL_REMAINDER_BLOCK_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_NUKE_RAW_PRECLUSTER_HAZE_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_TRANSPARENT_COMPOSITE_NOT_BLACK_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
           fi
@@ -162,6 +165,9 @@ jobs:
             grep -q 'METAL_TRANSPARENT_COMPOSITE_NOT_BLACK_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_FHD_REFERENCE_EMISSION_SCALE_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_ORIGINAL_NUKE_UNMODIFIED_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
+            grep -q 'METAL_NUKE_PRECLUSTER_SOURCE_DETECTION_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
+            grep -q 'METAL_NUKE_HAZE_FINAL_REMAINDER_BLOCK_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
+            grep -q 'METAL_NUKE_RAW_PRECLUSTER_HAZE_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
           fi
       - uses: actions/upload-artifact@v4

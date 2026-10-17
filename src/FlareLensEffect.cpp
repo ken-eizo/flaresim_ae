@@ -33,6 +33,7 @@
 #include "FlareLensCpuParallel.hpp"
 #include "FlareLensComposite.hpp"
 #include "FlareLensSourceModel.hpp"
+#include "FlareLensNukeSources.hpp"
 #include "FlareLensHostGeometry.hpp"
 #include "FlareLensHostTrace.hpp"
 #include "FlareLensOptics.hpp"
@@ -377,7 +378,8 @@ PF_Err checkout_args(PF_InData* in,FrameArgs& a){
 
 std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
                                      const FrameArgs& a,int width,int height,
-                                     float manual_scale_x=1.f,float manual_scale_y=1.f){
+                                     float manual_scale_x=1.f,float manual_scale_y=1.f,
+ std::vector<fl::Source>* raw_sources=nullptr){
  std::vector<fl::Source> sources;
  if(width<=0||height<=0)return sources;
  // AE's point control uses layer-space coordinates and supports off-frame lights.
@@ -393,16 +395,21 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
   if(a.fhd_stable_brightness)
     r*=fl::fhd_reference_emission_scale(width,height);
   sources.push_back({px,py,r*a.tint_r,r*a.tint_g,r*a.tint_b});
+  if(raw_sources)*raw_sources=sources;
   return sources;
  }
  const int limit=std::clamp(a.preview?a.preview_max:a.max_sources,1,2048);
- const int candidate_limit=a.cluster_radius>0?std::min(8192,limit*4):limit;
- // A bounded priority queue retains the best K samples, not the entire frame.
- struct Ranked {float score;int index;fl::Source src;};
- auto better=[](const Ranked& x,const Ranked& y){
-  return x.score>y.score||(x.score==y.score&&x.index<y.index);
- };
- std::priority_queue<Ranked,std::vector<Ranked>,decltype(better)> best(better);
+ // Nuke preserves ALL detected blocks until AFTER source clustering.
+ // The original pre-cap images are also the source of the Haze pass.
+ std::vector<fl::Source> raw;
+ const float tan_h=a.use_sensor&&a.camera_focal>0?
+   a.sensor_w/(2.f*a.camera_focal):std::tan(a.fov*.00872664625997f);
+ const float tan_v=a.use_sensor&&a.camera_focal>0?
+   a.sensor_h/(2.f*a.camera_focal):
+   a.fov_vertical>0?std::tan(a.fov_vertical*.00872664625997f):
+   tan_h*float(height)/width;
+ const float effective_h=2.f*std::atan(tan_h)*57.29577951308232f;
+ const float effective_v=2.f*std::atan(tan_v)*57.29577951308232f;
  const int stride=std::clamp(a.preview?a.preview_step:a.scan_step,1,32);
  // Match upstream Nuke's exact integer binning: the final floor(w/ds)
  // bucket also contains right/bottom remainder pixels. A ceil grid would
@@ -439,47 +446,12 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
   // remainder pixels included in the final (right/bottom) bucket.
   const float cx=.5f*(x+std::min(x+stride,width));
   const float cy=.5f*(y+std::min(y+stride,height));
-  const Ranked cand{score,by*dw+bx,{cx/width,cy/height,
-                         r*a.tint_r,g*a.tint_g,b*a.tint_b}};
-  if(int(best.size())<candidate_limit)best.push(cand);
-  else if(better(cand,best.top())){best.pop();best.push(cand);}
+  raw.push_back({cx/width,cy/height,
+                 r*a.tint_r,g*a.tint_g,b*a.tint_b});
  }
- std::vector<Ranked> ranked;
- ranked.reserve(best.size());
- while(!best.empty()){ranked.push_back(best.top());best.pop();}
- std::sort(ranked.begin(),ranked.end(),better);
- for(const auto& s:ranked)sources.push_back(s.src);
- if(a.cluster_radius>0&&sources.size()>1){
-  const float radius2=float(a.cluster_radius)*a.cluster_radius;
-  std::vector<fl::Source> clustered;
-  std::vector<uint8_t> consumed(sources.size());
-  for(size_t i=0;i<sources.size();i++){
-   if(consumed[i])continue;
-   auto sum=sources[i];
-   float weight=std::max(0.f,.2126f*sum.r+.7152f*sum.g+.0722f*sum.b);
-   float ax=sum.x*weight,ay=sum.y*weight;
-   for(size_t j=i+1;j<sources.size();j++){
-    if(consumed[j])continue;
-    const float dx=(sources[j].x-sources[i].x)*width;
-    const float dy=(sources[j].y-sources[i].y)*height;
-    if(dx*dx+dy*dy>radius2)continue;
-    const float wj=std::max(0.f,.2126f*sources[j].r+.7152f*sources[j].g+.0722f*sources[j].b);
-    ax+=sources[j].x*wj;ay+=sources[j].y*wj;weight+=wj;
-    sum.r+=sources[j].r;sum.g+=sources[j].g;sum.b+=sources[j].b;
-    consumed[j]=1;
-   }
-   if(weight>0){sum.x=ax/weight;sum.y=ay/weight;}
-   clustered.push_back(sum);
-  }
-  sources.swap(clustered);
-  if(sources.size()>size_t(limit)){
-   std::stable_sort(sources.begin(),sources.end(),[](const auto& x,const auto& y){
-    return .2126f*x.r+.7152f*x.g+.0722f*x.b > .2126f*y.r+.7152f*y.g+.0722f*y.b;
-   });
-   sources.resize(limit);
-  }
- }
- return sources;
+ if(raw_sources)*raw_sources=raw;
+ return fl::nuke_select_sources(std::move(raw),width,height,
+   effective_h,effective_v,a.cluster_radius,limit);
 }
 
 
@@ -584,8 +556,10 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
  // the size of an AE checkout ROI or a half-resolution SmartFX world.
  // For detected sources we must sample the full requested frame.
  // The source scanner uses input origin for ROI mapping in pixel().
+ std::vector<fl::Source> raw_sources;
  const auto sources=find_sources(input,source_depth,args,frame_w,frame_h,
-                                 geometry.light_scale_x,geometry.light_scale_y);
+                                 geometry.light_scale_x,geometry.light_scale_y,
+                                 &raw_sources);
  // A ray-hit diagnostic shows valid optical geometry independently of
  // Fresnel energy, exposure and 8/16/32bpc output quantization.
  if(std::clamp(args.output_mode,1,8)==7)settings.debug_ray_density=true;
@@ -645,7 +619,7 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   for(size_t i=0;i<ghost.rgb.size();i++)ghost.rgb[i]+=post[i];
  };
  if(render_haze_pass&&args.haze_gain>0){
-  fl::render_haze(post,sources,frame_w,frame_h,args.haze_gain,args.haze_radius,args.haze_passes,
+  fl::render_haze(post,raw_sources,frame_w,frame_h,args.haze_gain,args.haze_radius,args.haze_passes,
       args.auto_detect?std::clamp(args.preview?args.preview_step:args.scan_step,1,32):1);
   merge_post();
  }
@@ -1007,6 +981,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
    if(args.fhd_stable_brightness)
      radiance*=fl::fhd_reference_emission_scale(w,h);
    std::vector<fl::Source> sources;
+   std::vector<fl::Source> raw_sources;
    if(args.auto_detect){
     // The CPU stage receives tile metadata only. Input RGB remains on the
     // host-managed CUDA world; source extraction and ghost rays share the
@@ -1021,6 +996,8 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     detect.scan_step=std::clamp(reduced?args.preview_step:args.scan_step,1,32);
     detect.max_sources=std::clamp(reduced?args.preview_max:args.max_sources,1,2048);
     detect.cluster_radius=args.cluster_radius;
+    detect.fov_h_deg=settings.fov_h_deg;
+    detect.fov_v_deg=settings.fov_v_deg;
     detect.source_threshold=args.threshold;
     detect.source_cap=args.source_cap;
     detect.tint_r=args.tint_r;detect.tint_g=args.tint_g;detect.tint_b=args.tint_b;
@@ -1040,11 +1017,11 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
      const auto detection_start=std::chrono::steady_clock::now();
 #ifdef FLARELENS_HAVE_CUDA
      if(!err&&!fl::gpu::detect_sources_cuda(src,staging,reduction_bytes,
-        device_info.command_queuePV,detect,sources))
+        device_info.command_queuePV,detect,sources,&raw_sources))
        err=PF_Err_INTERNAL_STRUCT_DAMAGED;
 #else
      if(!err&&!fl::gpu::detect_sources_metal(src,staging,reduction_bytes,
-        device_info.command_queuePV,detect,sources))
+        device_info.command_queuePV,detect,sources,&raw_sources))
        err=PF_Err_INTERNAL_STRUCT_DAMAGED;
 #endif
      if(staging){
@@ -1066,6 +1043,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
    }else{
     sources.push_back({lx,ly,radiance*args.tint_r,
                        radiance*args.tint_g,radiance*args.tint_b});
+    raw_sources=sources;
    }
    LensSystem local_custom;
  const LensSystem* lens=selected_lens(args,local_custom);
@@ -1087,15 +1065,15 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
    const int haze_footprint=args.auto_detect?
       std::clamp(reduced_haze?args.preview_step:args.scan_step,1,32):1;
    const bool dense_haze=haze_active&&
-      (sources.size()>8||haze_footprint>1);
+      (raw_sources.size()>8||haze_footprint>1);
 #ifdef FLARELENS_HAVE_CUDA
    const size_t scratch_bytes=(sources.empty()||!lens)?0:
-      fl::gpu::scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
+      fl::gpu::scratch_bytes(*lens,int(std::max(sources.size(),raw_sources.size())),settings.grid,w,h,
        args.output_mode,need_ghost_blur,dense_haze,
        haze_active&&!dense_haze);
 #else
    const size_t scratch_bytes=(sources.empty()||!lens)?0:
-      fl::gpu::metal_scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
+      fl::gpu::metal_scratch_bytes(*lens,int(std::max(sources.size(),raw_sources.size())),settings.grid,w,h,
        args.output_mode,need_ghost_blur,dense_haze,
        haze_active&&!dense_haze);
 #endif
@@ -1120,6 +1098,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     view.haze_radius=args.haze_radius;
     view.haze_passes=args.haze_passes;
     view.haze_footprint=haze_footprint;
+   view.haze_sources=&raw_sources;
     view.command_stream=device_info.command_queuePV;
     view.check_abort=[](void* context)->int{
       return int(PF_ABORT(static_cast<PF_InData*>(context)));
