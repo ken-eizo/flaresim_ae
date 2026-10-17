@@ -157,12 +157,18 @@ transparent layer at **640×360 8bpc** in the actual compiled Windows
 EffectMain mock-host exercise (not live AE). This disproves a *universal*
 CPU-initial-defaults-is-black failure, not all GPU/host scenarios.
 
-**Added regression:** Metal 32-bit float Composite now renders a fully
-zero BGRA/alpha input and rejects all-blank RGB or RGB without alpha;
-it complements the existing Flare Only/empty input test. The packaged
-download is now extracted and the actual packaged `.metallib` is
-loaded and run by a standalone GPU test, rather than assuming the
-CI-generated `.metallib` matches a valid downloadable asset.
+**Added and passed regression (source `bc1b801`):** Metal 32-bit
+float Composite renders a fully zero BGRA/alpha input and rejects
+all-blank RGB or RGB without alpha, complementing the earlier Flare
+Only/empty-input test. Standalone tests on virtual macOS 15 ARM64,
+macOS 15 x86_64, and macOS 26 returned the non-black marker and 4-thread
+MFR parity. The final **packaged download** is now extracted and its
+actual `.metallib` is loaded and run with the same tests; all three GPU
+runner jobs passed. GitHub Actions run:
+https://github.com/ken-eizo/flaresim_ae/actions/runs/39040181414
+All five CI jobs passed; macOS 14 has no available Metal device, so its
+GPU runtime remains **unverified**. Full Windows regression 25/25 passed.
+These fixtures do **not** replicate an actual user AE host checkout.
 
 Remaining separate diagnoses: real AE CUDA/Metal GPU command selection,
 effect video cache / 2025 host regressions, dynamic data fields,
