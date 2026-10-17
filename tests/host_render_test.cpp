@@ -519,7 +519,7 @@ int main(){
  if(!trace)return 56;
  const std::string records((std::istreambuf_iterator<char>(trace)),
                             std::istreambuf_iterator<char>());
- if(records.find("version=1.0.2")==std::string::npos||
+ if(records.find("version=1.0.3")==std::string::npos||
     records.find("CPU_BEGIN")==std::string::npos||
     records.find("CPU_GHOST")==std::string::npos||
     records.find("PRE_RENDER")==std::string::npos)return 57;

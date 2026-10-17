@@ -1,7 +1,7 @@
 # FlareSimAE — Installation Guide
 
-This guide walks you through installing FlareSimAE for After Effects on
-Windows, either from a pre-built ZIP or by compiling the native effect.
+This guide covers the Windows CUDA and macOS Metal After Effects plugins,
+including pre-built ZIPs and source builds.
 
 The first public release is **v1.0.0**. Compilation and automated tests have
 passed on the development system, but not all interactive workflows have been
@@ -33,7 +33,12 @@ original prescriptions are also compiled into the AEX; the included lens
 files and conversion scripts are reference material, not sidecars required
 by the plug-in.
 
-No macOS, Linux, or CPU-only ZIP is available for this release.
+The macOS Release ZIP contains `FlareSimAE.plugin` with arm64 and x86_64
+code slices, Metal shader library and PiPL resources. Install it in
+`/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/`
+(or another compatible AE plug-in folder), then restart After Effects.
+The Mac build is ad-hoc signed, not notarized; host compatibility must
+be checked on the target Mac. No Linux binary is distributed.
 
 ---
 
@@ -247,10 +252,12 @@ into the editable After Effects parameter.
 
 ## Build limitations
 
-The v1.0.0 Release distributes Windows binaries only. An experimental
-macOS **CPU-only** source build and GitHub Actions workflow are documented
-in [docs/MACOS_BUILD.md](docs/MACOS_BUILD.md); native Metal and Vulkan GPU
-renderers remain unimplemented. Mac plugin compatibility is not yet validated.
+The current source builds Windows CUDA and macOS Metal GPU plugins from
+the same optical code and C++ host integration. See
+[docs/MACOS_BUILD.md](docs/MACOS_BUILD.md) for Metal and SDK provisioning
+details. Metal GPU parity was verified on a GitHub macOS runner, but real
+macOS After Effects host loading/rendering and Intel hardware remain
+unverified. Starburst and optical diagnostics are still CPU-only.
 
 The project is based on
 [FlareSim for Nuke](https://github.com/LocalStarlight/flaresim_nuke).

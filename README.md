@@ -1,6 +1,6 @@
 # FlareSimAE
 
-A CUDA-accelerated After Effects plugin for physically-based lens flare simulation.
+A CUDA/Metal GPU-accelerated After Effects plugin for physically-based lens flare simulation.
 FlareSimAE traces rays through real lens prescriptions to produce ghost
 reflections that respond to source position, wavelength, and aperture shape —
 without artist-painted flare textures.
@@ -59,11 +59,12 @@ starburst, and veiling haze are separate components. The FFT-based
 diffraction calculation is **not** a complete wave-optical simulation of
 every internal lens reflection.
 
-The Windows GPU implementation uses the CUDA stream supplied by the After
-Effects host. A CPU render path is also provided. An experimental **macOS
-CPU-only port** is under development with a GitHub Actions workflow; it is
-not yet a tested/distributed Mac plugin. Native Vulkan and macOS Metal GPU
-renderers are not currently available. See [macOS build](docs/MACOS_BUILD.md).
+Windows uses the CUDA stream provided by After Effects; macOS uses its
+native Metal command queue. Both use the same optical ray physics, C++
+SmartFX host adapter and embedded lens catalog. A CPU fallback is available
+on both platforms. Metal and CUDA accelerate Composite, Flare Only,
+Sources Preview, Ghost Only and Haze Only; diffraction/starburst and optical
+diagnostics still use CPU. See [macOS build](docs/MACOS_BUILD.md).
 
 ---
 
@@ -72,11 +73,12 @@ renderers are not currently available. See [macOS build](docs/MACOS_BUILD.md).
 See **[INSTALL.md](INSTALL.md)** for step-by-step installation and source
 build instructions, including troubleshooting.
 
-**Quick version:** download the Windows ZIP from
-[GitHub Releases](https://github.com/ken-eizo/flaresim_ae/releases), extract
-`FlareLensAE.aex` into the After Effects Plug-ins folder, and restart After
-Effects. The v1.0.0 release is the first public version; validate it on
-a test project before production use.
+**Quick version:** download the matching Windows or macOS ZIP from
+[GitHub Releases](https://github.com/ken-eizo/flaresim_ae/releases).
+Install `FlareLensAE.aex` on Windows, or `FlareSimAE.plugin` on macOS,
+into an After Effects Plug-ins folder and restart AE. Mac builds are
+ad-hoc signed but not notarized. Test on a noncritical project first;
+macOS AE GUI compatibility still requires in-host verification.
 The 1,370 lens prescriptions are already embedded in the `.aex`, so the
 included `lenses/` directory is optional reference data.
 
@@ -84,12 +86,12 @@ To build from source, obtain the Adobe After Effects SDK and NVIDIA CUDA
 Toolkit, then compile with CMake as described in the installation guide.
 
 **Requirements:**
-- **Platform:** Windows x64 (released); macOS CPU source build in progress
+- **Platform:** Windows x64 and macOS arm64/x86_64 Universal Binary
   (see [macOS build instructions](docs/MACOS_BUILD.md))
 - **Host:** Adobe After Effects with a compatible native effect plug-in API;
   the newest build still needs manual host validation
-- **Build tools:** CMake 3.24+, Visual Studio 2022 with the Windows SDK
-- **GPU:** NVIDIA CUDA for GPU rendering; CPU rendering is also available
+- **Build tools:** CMake 3.24+, Visual Studio 2022 on Windows; Xcode on Mac
+- **GPU:** Windows NVIDIA CUDA, macOS Metal; CPU fallback on both
 - **SDK:** Adobe After Effects C++ SDK, downloaded separately
 
 ---
@@ -395,18 +397,19 @@ evaluation, cache behaviour, multi-frame rendering and actual
 timeline frame times depend on After Effects and require in-host
 testing in addition to standalone GPU benchmarks.
 
-The latest Windows source build passed **24/24 automated tests**, but
+The Windows v1.0.3 source build passed **25/25 automated tests**, but
 that result does **not** establish full validation in After Effects.
 
 ---
 
 ## Performance tips
 
-**Windows v1.0.1 GPU dispatch fix:** the host can now select CUDA for
-in-frame manual-light tiles, and Sources Preview has its own CUDA
-rendering path. See the [v1.0.1 Windows CUDA regression audit](docs/WINDOWS_GPU_FIX_1.0.1.md).
-Diffraction/starburst and optical diagnostics still require CPU rendering;
-macOS Metal acceleration remains unimplemented.
+**Windows GPU ROI fix:** AE's expanded output requests now retain CUDA
+rendering instead of forcing the CPU fallback. See the
+[v1.0.1 CUDA regression audit](docs/WINDOWS_GPU_FIX_1.0.1.md).
+**macOS Metal:** the same optical ray equations are compiled as Metal
+shaders, with hardware-backed GPU parity tests. Starburst and optical
+diagnostics remain CPU on both platforms.
 
 - **Ray Grid** is a major render-time lever. Increasing it from 64 to
   512 multiplies pupil samples by 64.
@@ -431,12 +434,13 @@ limitations.
 
 ## Development
 
-The current source supports Windows x64 builds with Visual Studio,
-CMake, and the Adobe After Effects SDK. CUDA acceleration is optional
-at build time; no proprietary Adobe SDK files are included in this
-repository. The macOS source path and its GitHub Actions workflow remain
-experimental and require a separately supplied Mac AE SDK; a successful
-portable core test alone does not validate a native Mac effect.
+The current source builds Windows x64 CUDA and macOS arm64/x86_64 Metal
+plugins from one repository. The shared C++ host adapter, CPU optics and
+ray physics remain common. Platform-native GPU backends are isolated in
+CUDA and Metal sources. No proprietary Adobe SDK files are included in
+this repository; macOS Actions restores the SDK privately from encrypted
+secrets. A Metal GPU parity test runs on actual Apple hardware, but
+successful CI is not a substitute for testing inside macOS After Effects.
 
 See [INSTALL.md](INSTALL.md) for compilation,
 [Architecture](docs/ARCHITECTURE.md) for the rendering system,

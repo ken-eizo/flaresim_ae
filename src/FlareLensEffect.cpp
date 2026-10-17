@@ -40,6 +40,8 @@
 #include "FlareLensGpuBridge.hpp"
 #include "FlareLensGpuDetection.hpp"
 #include <cuda_runtime_api.h>
+#elif defined(FLARELENS_HAVE_METAL)
+#include "FlareLensMetal.hpp"
 #endif
 
 namespace {
@@ -56,7 +58,12 @@ enum { P_INPUT=0,P_LIGHT,P_GAIN,P_GRID,P_FOV,P_THRESHOLD,P_AUTO,P_MAXSOURCES,
        P_MANUAL_RADIANCE,P_HOST_TRACE,P_ADAPTIVE_PREVIEW,P_MANUAL_DIAMETER,
        P_LENS_SOURCE,P_CATALOG_INDEX,P_CATALOG_BROWSE,
        P_CUSTOM_LENS,P_CUSTOM_CLONE,P_COUNT };
-constexpr auto kVersion=PF_VERSION(1,0,2,PF_Stage_RELEASE,0);
+constexpr auto kVersion=PF_VERSION(1,0,3,PF_Stage_RELEASE,0);
+#if defined(FLARELENS_HAVE_CUDA)
+constexpr auto kNativeGpuFramework=PF_GPU_Framework_CUDA;
+#elif defined(FLARELENS_HAVE_METAL)
+constexpr auto kNativeGpuFramework=PF_GPU_Framework_METAL;
+#endif
 constexpr A_long kInputCheckout=1;
 
 struct RGB {float r=0,g=0,b=0,a=0;};
@@ -774,12 +781,12 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  // at full-sensor resolution. Otherwise AE silently chooses the costly CPU
  // path for ordinary manual-light ROI requests.
  // CPU rendering still checks out only its actual ROI for manual lights.
-#ifdef FLARELENS_HAVE_CUDA
- const bool cuda_input_eligible=extra->input->what_gpu==PF_GPU_Framework_CUDA&&
+#if defined(FLARELENS_HAVE_CUDA) || defined(FLARELENS_HAVE_METAL)
+ const bool native_gpu_input_eligible=extra->input->what_gpu==kNativeGpuFramework&&
    (args.output_mode==1||args.output_mode==2||
     args.output_mode==3||args.output_mode==4||
     args.output_mode==5)&&args.star_gain<=0;
- request.rect=(args.auto_detect||cuda_input_eligible)?full:visible;
+ request.rect=(args.auto_detect||native_gpu_input_eligible)?full:visible;
 #else
  request.rect=args.auto_detect?full:visible;
 #endif
@@ -802,7 +809,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  // the GPU optical renderer computes the FULL sensor and crops to the
  // requested AE tile, preserving physical source/sensor coordinates.
  // CPU remains the explicit fallback when the host provides no CUDA.
-#ifdef FLARELENS_HAVE_CUDA
+#if defined(FLARELENS_HAVE_CUDA) || defined(FLARELENS_HAVE_METAL)
  const auto& output_rect=extra->input->output_request.rect;
  const bool valid_scale=in->downsample_x.num>0&&in->downsample_x.den>0&&
    in->downsample_y.num>0&&in->downsample_y.den>0;
@@ -818,9 +825,15 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
    (in->downsample_y.num>0&&in->downsample_y.num<in->downsample_y.den));
  const int scan_step=args.preview||scaled_preview?
    args.preview_step:args.scan_step;
+#ifdef FLARELENS_HAVE_CUDA
  const bool detectable=!args.auto_detect||
   fl::gpu::detection_scratch_bytes(full.right,full.bottom,
                                    std::clamp(scan_step,1,32))>0;
+#else
+ const bool detectable=!args.auto_detect||
+  fl::gpu::metal_detection_scratch_bytes(full.right,full.bottom,
+                                         std::clamp(scan_step,1,32))>0;
+#endif
  // AE routinely expands the output request BEYOND the layer bounds (e.g.
  // -192,-192..2112,2112 for a 1920-square composition). The actual
  // emitted optical image is bounded by result_rect = requested ∩ sensor.
@@ -829,7 +842,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  // for every normal expanded request in AE even when CUDA was available.
  const bool gpu_geometry=visible.right>visible.left&&
                          visible.bottom>visible.top;
- const bool can_gpu=extra->input->what_gpu==PF_GPU_Framework_CUDA&&
+ const bool can_gpu=extra->input->what_gpu==kNativeGpuFramework&&
    detectable&&gpu_output&&args.star_gain<=0&&
    valid_scale&&gpu_geometry&&full.right>0&&full.bottom>0&&
    in->width<=16384&&in->height<=16384;
@@ -864,10 +877,10 @@ PF_Err smart_render(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra){
  return err?err:checkin;
 }
 
-#ifdef FLARELENS_HAVE_CUDA
+#if defined(FLARELENS_HAVE_CUDA) || defined(FLARELENS_HAVE_METAL)
 PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra){
  if(!extra||!extra->input||!extra->cb||!extra->input->pre_render_data||
-    extra->input->what_gpu!=PF_GPU_Framework_CUDA)return PF_Err_BAD_CALLBACK_PARAM;
+    extra->input->what_gpu!=kNativeGpuFramework)return PF_Err_BAD_CALLBACK_PARAM;
  const auto& args=*static_cast<const FrameArgs*>(extra->input->pre_render_data);
  fl::host_trace(args.host_trace,"GPU_ENTER","host GPU selector requested");
  const bool supported_mode=args.output_mode==1||args.output_mode==2||
@@ -896,9 +909,12 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
  if(!err&&gs){
   PF_GPUDeviceInfo device_info{};
   err=gs->GetDeviceInfo(in->effect_ref,extra->input->device_index,&device_info);
-  if(!err&&(device_info.device_framework!=PF_GPU_Framework_CUDA||
-            !device_info.compatibleB))err=PF_Err_BAD_CALLBACK_PARAM;
+  if(!err&&(device_info.device_framework!=kNativeGpuFramework||
+            !device_info.compatibleB||!device_info.command_queuePV))
+    err=PF_Err_BAD_CALLBACK_PARAM;
+#ifdef FLARELENS_HAVE_CUDA
   const auto render_stream=reinterpret_cast<cudaStream_t>(device_info.command_queuePV);
+#endif
   void* src=nullptr;
   void* dst=nullptr;
   void* empty_input=nullptr;
@@ -934,14 +950,19 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
   // case synthesize a zero-BGRA128 device image for the manual emitter.
   // Flare/Ghost/Haze-only draw independent plates: only Composite needs
   // the source pixels for RGB carry-through and alpha determination.
-  if(!err&&!input&&args.output_mode==1){
+  if(!err&&!input&&(args.output_mode==1||args.output_mode==3)){
    const size_t bytes=tiled?size_t(full_w)*full_h*16:
       size_t(output->rowbytes)*size_t(output->height);
    if(!bytes)err=PF_Err_BAD_CALLBACK_PARAM;
    if(!err)err=gs->AllocateDeviceMemory(in->effect_ref,extra->input->device_index,
                                        bytes,&empty_input);
+#ifdef FLARELENS_HAVE_CUDA
    if(!err&&cudaMemsetAsync(empty_input,0,bytes,render_stream)!=cudaSuccess)
     err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#else
+   if(!err&&!fl::gpu::metal_zero(empty_input,bytes,device_info.command_queuePV))
+    err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#endif
    if(!err)src=empty_input;
   }
   if(!err&&dst&&(src||args.output_mode!=1)){
@@ -985,15 +1006,26 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     detect.gate_alpha=args.source_alpha;
     if(input&&src){
      void* staging=nullptr;
+#ifdef FLARELENS_HAVE_CUDA
      const size_t reduction_bytes=fl::gpu::detection_scratch_bytes(
         w,h,detect.scan_step);
+#else
+     const size_t reduction_bytes=fl::gpu::metal_detection_scratch_bytes(
+        w,h,detect.scan_step);
+#endif
      if(!reduction_bytes)err=PF_Err_BAD_CALLBACK_PARAM;
      if(!err)err=gs->AllocateDeviceMemory(in->effect_ref,
        extra->input->device_index,reduction_bytes,&staging);
      const auto detection_start=std::chrono::steady_clock::now();
+#ifdef FLARELENS_HAVE_CUDA
      if(!err&&!fl::gpu::detect_sources_cuda(src,staging,reduction_bytes,
         device_info.command_queuePV,detect,sources))
        err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#else
+     if(!err&&!fl::gpu::detect_sources_metal(src,staging,reduction_bytes,
+        device_info.command_queuePV,detect,sources))
+       err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#endif
      if(staging){
       const auto e2=gs->FreeDeviceMemory(in->effect_ref,
                              extra->input->device_index,staging);
@@ -1035,10 +1067,17 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       std::clamp(reduced_haze?args.preview_step:args.scan_step,1,32):1;
    const bool dense_haze=haze_active&&
       (sources.size()>8||haze_footprint>1);
+#ifdef FLARELENS_HAVE_CUDA
    const size_t scratch_bytes=(sources.empty()||!lens)?0:
       fl::gpu::scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
        args.output_mode,need_ghost_blur,dense_haze,
        haze_active&&!dense_haze);
+#else
+   const size_t scratch_bytes=(sources.empty()||!lens)?0:
+      fl::gpu::metal_scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
+       args.output_mode,need_ghost_blur,dense_haze,
+       haze_active&&!dense_haze);
+#endif
    void* scratch=nullptr;
    if(!err&&!sources.empty()&&!scratch_bytes)err=PF_Err_BAD_CALLBACK_PARAM;
    if(!err&&scratch_bytes)
@@ -1066,7 +1105,14 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     };
     view.abort_context=in;
     const auto start=std::chrono::steady_clock::now();
-    if(!fl::gpu::cuda_compose(*lens,sources,settings,view,scratch,scratch_bytes)){
+#ifdef FLARELENS_HAVE_CUDA
+    const bool composed=fl::gpu::cuda_compose(*lens,sources,settings,view,
+                                               scratch,scratch_bytes);
+#else
+    const bool composed=fl::gpu::metal_compose(*lens,sources,settings,view,
+                                                scratch,scratch_bytes);
+#endif
+    if(!composed){
      const PF_Err cancel=PF_ABORT(in);
      err=cancel?cancel:PF_Err_INTERNAL_STRUCT_DAMAGED;
     }
@@ -1080,6 +1126,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
        size_t(copy_left-output->origin_x)*16;
      // Pixels outside result_rect are transparent black, never a
      // partially uninitialized GPU World or an out-of-range memcpy.
+#ifdef FLARELENS_HAVE_CUDA
      if(output_padded&&cudaMemset2DAsync(
           dst,size_t(output->rowbytes),0,
           size_t(output->width)*16,size_t(output->height),
@@ -1093,6 +1140,14 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
        err=PF_Err_INTERNAL_STRUCT_DAMAGED;
      if(!err&&cudaStreamSynchronize(render_stream)!=cudaSuccess)
        err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#else
+     if(!fl::gpu::metal_copy_region(full_gpu_output,dst,
+       device_info.command_queuePV,size_t(full_w)*16,
+       size_t(output->rowbytes),copy_left,copy_top,copy_right,copy_bottom,
+       output->origin_x,output->origin_y,output->width,output->height,
+       output_padded))
+       err=PF_Err_INTERNAL_STRUCT_DAMAGED;
+#endif
     }
     if(args.host_trace){
      const auto elapsed=std::chrono::duration<double,std::milli>(
@@ -1138,7 +1193,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
   switch(cmd){
    case PF_Cmd_ABOUT:
     std::snprintf(out->return_msg,sizeof(out->return_msg),
-      "FlareSimAE 1.0.2 / native CUDA tiled SmartFX and source preview");
+      "FlareSimAE 1.0.3 / native CUDA/Metal SmartFX optical rendering");
     return PF_Err_NONE;
    case PF_Cmd_GLOBAL_SETUP:
     out->my_version=kVersion;
@@ -1150,7 +1205,7 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
                     PF_OutFlag2_REVEALS_ZERO_ALPHA|
                     PF_OutFlag2_SUPPORTS_SMART_RENDER|
                     PF_OutFlag2_SUPPORTS_THREADED_RENDERING;
-#ifdef FLARELENS_HAVE_CUDA
+#if defined(FLARELENS_HAVE_CUDA) || defined(FLARELENS_HAVE_METAL)
     // AE 25.6 header: this flag is required in GLOBAL_SETUP as well as device setup.
     out->out_flags2|=PF_OutFlag2_SUPPORTS_GPU_RENDER_F32;
 #endif
@@ -1199,9 +1254,9 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
    case PF_Cmd_RENDER:return render_worlds(in,out,&params[P_INPUT]->u.ld,output,from_legacy(in,params));
    case PF_Cmd_SMART_PRE_RENDER:return pre_render(in,(PF_PreRenderExtra*)extra);
    case PF_Cmd_SMART_RENDER:return smart_render(in,out,(PF_SmartRenderExtra*)extra);
-#ifdef FLARELENS_HAVE_CUDA
+#if defined(FLARELENS_HAVE_CUDA) || defined(FLARELENS_HAVE_METAL)
    case PF_Cmd_GPU_DEVICE_SETUP:
-    if(extra&&((PF_GPUDeviceSetupExtra*)extra)->input->what_gpu==PF_GPU_Framework_CUDA)
+    if(extra&&((PF_GPUDeviceSetupExtra*)extra)->input->what_gpu==kNativeGpuFramework)
      out->out_flags2|=PF_OutFlag2_SUPPORTS_GPU_RENDER_F32;
     return PF_Err_NONE;
    case PF_Cmd_GPU_DEVICE_SETDOWN:return PF_Err_NONE;

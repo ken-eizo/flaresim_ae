@@ -2,7 +2,7 @@ name: macOS build
 
 on:
   push:
-    branches: [main]
+    branches: [main, metal-port]
     paths:
       - '.github/workflows/macos.yml'
       - 'CMakeLists.txt'
@@ -32,7 +32,7 @@ jobs:
         run: ctest --test-dir build-macos-core --output-on-failure --parallel 3
 
   ae-plugin:
-    name: macOS native AE plugin (CPU)
+    name: macOS native AE plugin (Metal)
     # SDK is restored from encrypted Actions secrets; no proprietary SDK
     # content is committed or published in CI artifacts.
     runs-on: macos-15
@@ -76,8 +76,13 @@ jobs:
       - name: Configure universal macOS AE effect
         run: |
           cmake -S . -B build-macos-ae -G Ninja -DCMAKE_BUILD_TYPE=Release             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0             -DAE_SDK_ROOT="$AE_SDK_ROOT"             -DFLARELENS_BUILD_AE=ON -DFLARELENS_ENABLE_CUDA=OFF
-      - name: Compile FlareSimAE.plugin
+      - name: Compile Metal-enabled FlareSimAE.plugin
         run: cmake --build build-macos-ae --target FlareLensAE --parallel 3
+      - name: Run native Metal GPU physics and parity tests
+        shell: bash
+        run: |
+          cmake --build build-macos-ae --target FlareLensMetalGpuTest --parallel 3
+          ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure --verbose
       - name: Check native bundle and architectures
         shell: bash
         run: |
@@ -87,14 +92,70 @@ jobs:
           binary="$plugin/Contents/MacOS/FlareSimAE"
           test -f "$binary"
           file "$binary"
-          lipo -verify_arch arm64 x86_64 "$binary"
+          archs="$(lipo -archs "$binary")"
+          [[ " $archs " == *" arm64 "* ]] || { echo "::error::Missing arm64 slice"; exit 1; }
+          [[ " $archs " == *" x86_64 "* ]] || { echo "::error::Missing x86_64 slice"; exit 1; }
           find "$plugin/Contents/Resources" -type f -name '*.rsrc' -print -quit | grep .
+          test -s "$plugin/Contents/Resources/FlareLensMetal.metallib"
+          # Rez may attach a resource fork to the bundle. Remove only Finder
+          # metadata/extended attributes before ad-hoc signing; keep .rsrc.
+          xattr -cr "$plugin"
           codesign --force --deep --sign - "$plugin"
-          ditto -c -k --keepParent "$plugin" "$RUNNER_TEMP/FlareSimAE_macOS_CPU_unverified.zip"
-          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_macOS_CPU_unverified.zip" >> "$GITHUB_ENV"
+          codesign --verify --deep --strict --verbose=2 "$plugin"
+          staging="$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS"
+          mkdir -p "$staging"
+          ditto "$plugin" "$staging/FlareSimAE.plugin"
+          cp README.md INSTALL.md NOTICE.md LICENSE "$staging/"
+          cp upstream/LICENSE "$staging/LICENSE_UPSTREAM.txt"
+          ditto -c -k --keepParent "$staging" "$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS.zip"
+          echo "FLARE_MAC_ZIP=$RUNNER_TEMP/FlareSimAE_v1.0.3_macOS.zip" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
         with:
-          name: FlareSimAE-macOS-CPU-unverified
+          name: FlareSimAE-macOS-Metal-unverified
           path: ${{ env.FLARE_MAC_ZIP }}
           if-no-files-found: error
           retention-days: 14
+
+  publish-macos:
+    name: Publish verified Metal macOS ZIP
+    needs: [core-tests, ae-plugin]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Download tested and signed macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: FlareSimAE-macOS-Metal-unverified
+          path: release-macos
+      - name: Validate artifact and publish v1.0.3
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          zip="release-macos/FlareSimAE_v1.0.3_macOS.zip"
+          test -s "$zip"
+          unzip -Z1 "$zip" | grep -Fq 'FlareSimAE.plugin/Contents/MacOS/FlareSimAE'
+          unzip -Z1 "$zip" | grep -Fq 'FlareSimAE.plugin/Contents/Resources/FlareLensMetal.metallib'
+          shasum -a 256 "$zip"
+          tag="v1.0.3"
+          if gh release view "$tag" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip" --repo "$GH_REPO" --clobber
+          else
+            cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          FlareSimAE v1.0.3 introduces a native Metal GPU backend for macOS using the same optical core and AE SmartFX implementation as Windows CUDA.
+
+          **macOS:** Universal arm64/x86_64 plugin, native Metal acceleration for Composite, Flare Only, Sources Preview, Ghost Only and Haze Only. Validated with a real Apple GPU in GitHub Actions (optical CPU parity, ghost blur, HDR source detection and haze). Ad-hoc signed; not notarized. Loading and rendering in the macOS After Effects GUI is not yet independently validated.
+
+          **Windows:** The previous tested CUDA Windows release is [v1.0.2](https://github.com/ken-eizo/flaresim_ae/releases/tag/v1.0.2); a Windows v1.0.3 asset has not yet been generated. Do not install the macOS plugin on Windows.
+
+          Diffraction/starburst and optical diagnostics continue to use CPU fallback on both platforms. The Adobe SDK is not included in the release.
+          NOTES
+            gh release create "$tag" "$zip" --repo "$GH_REPO" --target "$GITHUB_SHA" \
+              --title "FlareSimAE v1.0.3 — macOS Metal" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" --latest
+          fi

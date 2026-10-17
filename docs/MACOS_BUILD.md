@@ -1,115 +1,101 @@
-# macOS builds (GitHub Actions)
+# macOS: native Metal GPU renderer and Universal After Effects plugin
 
-The repository has a **macOS CPU optical build path** and a GitHub Actions
-workflow at [`.github/workflows/macos.yml`](../.github/workflows/macos.yml).
+FlareSimAE builds from **the same repository and optical equations** on Windows
+and macOS. The shared C++ After Effects SmartFX effect, source model, lens
+catalog, ROI, settings and physical ray tracer are not separately forked.
 
-## Current limitations
+| Platform | Native AE GPU API | GPU optical modes | CPU fallback |
+| --- | --- | --- | --- |
+| Windows x64 | CUDA (AE-provided CUDA stream) | Composite, Flare Only, Sources Preview, Ghost Only, Haze Only | Yes |
+| macOS arm64 / x86_64 | Metal (AE-provided MTLCommandQueue) | Same five modes | Yes |
 
-The macOS port is a native **CPU-only** After Effects effect. It is not a
-CUDA, Metal, or Vulkan renderer. macOS users must not expect the same GPU
-performance as the Windows CUDA binary. Native AE host compatibility
-remains unverified until a complete macOS build and an After Effects host
-test have succeeded.
+**Diffraction/starburst and optical diagnostic output modes remain CPU-only
+on both platforms.** The native Metal implementation does not claim to
+accelerate every effect parameter or output mode.
 
-CI has two jobs:
+## Shared source / numerical parity
 
-1. **macOS CPU optical core**: always compiles and runs portable tests on
-   GitHub's macOS runner. **No Adobe SDK is involved.** A pass proves only
-   that the portable optics/tests build, not that the plugin is loadable.
-2. **macOS native AE plugin (CPU)**: runs only when the owner enables
-   `FLARESIM_MAC_SDK_READY=true` as a GitHub Actions repository variable.
-   Downloads the owner's separately acquired Mac AE SDK to the runner's
-   temporary folder and compiles an unsigned/adhoc-signed universal
-   `FlareSimAE.plugin` for `arm64+x86_64`. If successful, uploads a
-   short-lived **GitHub Actions artifact** (not a public Release).
+- `src/FlareLensEffect.cpp` handles AE's SmartFX PreRender, ROI, GPU device
+  selection, GPU World checkouts, MFR and output buffer management on both OSes.
+- `src/FlareLensGpu.cu` implements CUDA. The exact device ray physics section
+  is extracted into a generated MSL include by
+  `scripts/generate_metal_physics.py`, avoiding a second drifting Fresnel
+  implementation.
+- `src/FlareLensMetalKernels.metal` implements Metal compute dispatch,
+  2x2 atomic photon scattering, HDR detection, ghost blur, veiling haze,
+  source markers and alpha composition.
+- `src/FlareLensMetal.mm` owns the Metal pipeline cache and encoders. GPU
+  Worlds and scratch are allocated/obtained through Adobe GPUDeviceSuite.
+  GPU commands are synchronized before the host's buffers are returned.
+- Both backends share `FlareLensGpuBridge.hpp` and the same lens/pupil/spectral
+  preparation code.
+- Mac lens bytes are embedded byte-for-byte from the same 1,370 prescriptions.
 
-Do not mark the macOS plugin supported or attach it to a stable Release
-until native AE tests establish its actual behavior.
+The native Metal hardware test `FlareLensMetalGpuTest` compares Composite,
+Flare Only and Ghost Only against `fl::render_cpu`; it also exercises source
+markers, Haze and Metal HDR source detection. This is a **real GPU test on a
+macOS Actions runner**, not an After Effects GUI test. Actual AE host
+performance and compatibility still require a user test on a Mac.
 
-## Adobe SDK inputs
+## Private Adobe SDK in GitHub Actions
 
-The two paths supplied by the developer are:
+The Mac Adobe SDK was supplied privately by the project owner. It is **never
+committed**, published as a release asset, or uploaded as a workflow artifact.
 
-- Windows SDK: `E:\ae25.6_61.64bit.AfterEffectsSDK`
-- macOS SDK: `E:\AfterEffectsSDK_25.6_61_mac`
+`.github/workflows/macos.yml` restores the minimal SDK headers/resources/util
+from 23 encrypted repository secrets `AE_SDK_MAC_00` through
+`AE_SDK_MAC_22` and the integrity manifest `AE_SDK_MAC_MANIFEST`.
+`scripts/actions_sdk_private.py` verifies the complete SHA-256 manifest,
+archive members and path safety before extraction into the runner's temporary
+directory. No public URL is required.
 
-**GitHub-hosted Mac runners cannot access local Windows E: drives.**
+The pipeline compiles the CPU core, a universal arm64+x86_64 AE plugin,
+the Metal shader library, and a hardware-backed GPU parity test. It verifies
+the binary architectures, Rez PiPL resource, Metal shader library and ad-hoc
+code signature, then packages the plugin. GitHub Actions secrets are needed
+only to rebuild the native plugin, not to use the released binary.
 
-The macOS directory contains a file named
+## Build from the same source tree
 
-```text
-AfterEffectsSDK_25.6_61_mac/ae25.6_61.64bit.AfterEffectsSDK.tar.zstd.zip
-```
-
-Despite the filename extension `.zip`, its magic header is a
-**Zstandard frame** (28 B5 2F FD), not a ZIP container.
-
-SHA-256 observed on the provided Mac SDK payload:
-```text
-e02fa2b488c3cceb238866b648eb9a2526d308a260744367915a2f173663c36c
-```
-
-The pipeline checks this exact digest before extraction, then uses a trusted
-runner-installed `zstd` decoder. The included third-party `zstd` binary
-from the SDK folder is **never executed** in CI. The pipeline also does
-not commit or upload SDK headers, binaries, resources or archives to the
-public repository.
-
-Adobe's developer SDK distribution terms still apply. Only an SDK
-supplied through an authorized private source should be used.
-
-## Enabling the native plugin job
-
-1. Host the original 1,540,471-byte Mac SDK Zstandard payload in a **private
-   HTTPS storage location** for which you have permission to provide access
-   to your own GitHub Actions runner.
-2. In GitHub **Settings → Secrets and variables → Actions → Secrets** add
-   `AE_SDK_MAC_URL` containing a working, private/signed HTTPS download URL.
-   The workflow never prints this URL.
-3. Under **Variables**, set `FLARESIM_MAC_SDK_READY` to `true`.
-4. Open **Actions → macOS build → Run workflow**. Check the two jobs and the
-   `FlareSimAE-macOS-CPU-unverified` artifact.
-
-Until those credentials exist, the plugin job is intentionally skipped
-rather than falsely claiming that the AEX compiled for Mac.
-
-If the signed URL expires, update the secret and rerun. GitHub's artifacts
-are ephemeral; a validated macOS Release must be prepared separately.
-
-## Local Mac build
-
-Once the owner has legitimately extracted the Mac AE SDK on a Mac:
+On a Mac with Xcode Command Line Tools and a properly acquired Adobe AE SDK:
 
 ```sh
 cmake -S . -B build-macos -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES='arm64;x86_64' \
-  -DAE_SDK_ROOT='/path/to/ae25.6_61.64bit.AfterEffectsSDK/Examples' \
-  -DFLARELENS_BUILD_AE=ON -DFLARELENS_ENABLE_CUDA=OFF
-cmake --build build-macos --target FlareLensAE
+  -DAE_SDK_ROOT='/path/to/AfterEffectsSDK/Examples' \
+  -DFLARELENS_BUILD_AE=ON
+cmake --build build-macos --target FlareLensAE FlareLensMetalGpuTest
+ctest --test-dir build-macos -R FlareLensMetalGpuTest --output-on-failure
 ```
 
-The build is intended to produce `FlareSimAE.plugin`. GitHub Actions
-additionally runs a binary-architecture and PiPL resource check.
+The result is `FlareSimAE.plugin`, containing `Contents/MacOS/FlareSimAE`,
+`Contents/Resources/FlareSimAE.rsrc` and
+`Contents/Resources/FlareLensMetal.metallib`.
 
-## Platform specifics
+## Installing on macOS
 
-- Windows uses compiled Win32 `RCDATA` for its 1,370 catalog lenses.
-- macOS uses a generated, read-only C++ byte table holding the **same
-  exact 1,370 source texts** and stable catalog indices.
-- The Windows modal `DialogBox` lens browser is replaced by a
-  user-triggered Cocoa combo-box picker.
-- The existing effect Match Name and parameter indices are preserved.
-- macOS native `Rez` compiles `FlareLensPiPL.r` for the effect bundle.
-- CUDA GPU selectors and GPU flags are omitted on macOS; optical rendering
-  falls back to the CPU.
-- Unsigned or ad-hoc signed GitHub Actions artifacts are **not notarized**.
-  Do not disable OS security controls simply to install an untested artifact.
+Extract the release ZIP, then place `FlareSimAE.plugin` in an After Effects
+plugin folder, such as
+`/Library/Application Support/Adobe/Common/Plug-ins/7.0/MediaCore/`.
+Quit AE before installing; avoid duplicate copies. For Metal acceleration,
+enable the host's Metal GPU renderer and use a supported 32-bpc SmartFX
+workflow. AE can choose CPU fallback for unsupported formats and modes.
 
-## Next improvements
+The GitHub Actions binary is **ad-hoc signed, not Apple Developer ID signed
+or notarized**. macOS Gatekeeper may require explicit approval. Do not
+disable system-wide security protections to install a plugin.
 
-After the first successful Mac plugin CI, verify packaging, signing,
-After Effects host compatibility, 8/16/32-bpc CPU renders, MFR, UI
-interactions, and project save/reopen on actual Apple Silicon and Intel
-machines. Metal acceleration requires a separate native renderer and
-measurement against CPU/CUDA, not an automatic translation.
+## Qualification limits
+
+- Verified: arm64+x86_64 Mach-O compilation, Metal shader compilation,
+  macOS Apple GPU hardware parity test, resource presence, code-signature
+  validation and bundle packaging.
+- Not yet verified: loading and rendering inside a real macOS After Effects
+  application, Intel Mac runtime, all lens/parameter combinations, and
+  notarized distribution.
+- On both OSes: starburst and optical diagnostic modes still render on CPU.
+  Unsupported GPU formats/settings are expected to fall back to CPU.
+
+Do not equate GPU kernel time, a standalone Metal test, or successful
+GitHub Actions compilation with AE's Composition Profiler frame time.
