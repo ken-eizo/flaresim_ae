@@ -2,7 +2,7 @@ name: macOS build
 
 on:
   push:
-    branches: [main, dev/macos-compatibility-audit]
+    branches: [main]
     paths:
       - '.github/workflows/macos.yml'
       - 'CMakeLists.txt'
