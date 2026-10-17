@@ -4,6 +4,8 @@ Download the **[latest GitHub Release](https://github.com/ken-eizo/flaresim_ae/r
 
 **Close After Effects before installing or replacing the plug-in.**
 
+**Important for Mac users:** The published v1.0.3 macOS ZIP is known not to register correctly in After Effects. To test the corrected PiPL and bundle configuration, use the [v1.0.4 macOS CI artifact](https://github.com/ken-eizo/flaresim_ae/actions/runs/38993870423/artifacts/12086655999), then extract the inner `FlareSimAE_macOS_CI.zip`. This is a test build, not a formally validated macOS After Effects release.
+
 ## Windows
 
 1. Download and extract the **Windows** ZIP.

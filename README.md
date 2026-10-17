@@ -12,6 +12,8 @@ FlareSimAE is an open-source After Effects port of [FlareSim for Nuke](https://g
 
 **[Download the latest release](https://github.com/ken-eizo/flaresim_ae/releases/latest)** · **[Installation instructions](INSTALL.md)**
 
+> **macOS download notice (October 17, 2026):** The published **v1.0.3 macOS ZIP has a broken AE bundle/PiPL and may not appear in Effects & Presets**. A corrected **v1.0.4 test build** is available as a [GitHub Actions artifact](https://github.com/ken-eizo/flaresim_ae/actions/runs/38993870423/artifacts/12086655999). That artifact contains `FlareSimAE_macOS_CI.zip`; extract it, then install the `FlareSimAE.plugin` inside. The build passed automated Metal, PiPL, code-signing and ZIP checks; actual macOS After Effects loading still requires manual confirmation. Do not treat it as a formal v1.0.4 release.
+
 Download the ZIP for your operating system. Install only `FlareLensAE.aex` (Windows) or `FlareSimAE.plugin` (macOS) into your After Effects Plug-ins folder.
 
 The macOS build is ad-hoc signed, not Apple-notarized. Its Metal GPU implementation has passed Apple GPU tests, but in-host After Effects operation on macOS has not yet been independently verified.
