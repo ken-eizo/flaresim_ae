@@ -50,7 +50,7 @@ static SPErr SPAPI release(const char*,int32){return 0;}
 static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
                   int mode=1,int quick_preset=1,int catalog_id=0,
                   std::vector<float>* snapshot=nullptr,bool custom=false,
-                  bool shipping_defaults=false){
+                  bool shipping_defaults=false,bool stable_brightness=false){
  g_format=format;
  const size_t stride=format==PF_PixelFormat_ARGB128?sizeof(PF_PixelFloat):
                      format==PF_PixelFormat_ARGB64?sizeof(PF_Pixel16):sizeof(PF_Pixel);
@@ -78,6 +78,7 @@ static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
  // Confirm manual emitter and normal compositing, with no detection.
  definitions[5].u.bd.value=FALSE; // Detect Bright Sources: P_AUTO=6 => capture[5]
  definitions[10].u.pd.value=mode; // Output Mode: P_OUTPUT_MODE=11 => capture[10]
+ definitions[63].u.bd.value=stable_brightness?TRUE:FALSE; // appended param64
  if(!shipping_defaults){
   definitions[54].u.fs_d.value=1000.; // legacy raw point regression
   definitions[57].u.fs_d.value=0.; // optical regression uses point, not area
@@ -482,6 +483,57 @@ static int validate_host_gpu_dispatch(Main effect,PF_InData& in){
 }
 #endif
 
+static int validate_fhd_vs_720p(Main effect,PF_InData& in){
+ // Compare average scene-linear energy PER PIXEL, not total energy.
+ std::vector<float> hd1080,hd720,matched1080,matched720;
+ auto draw=[&](int w,int h,bool norm,std::vector<float>& rgb){
+   return render(effect,in,w,h,PF_PixelFormat_ARGB128,2,1,1,
+                 &rgb,false,false,norm);
+ };
+ if(draw(1920,1080,false,hd1080)||draw(1280,720,false,hd720)||
+    draw(1920,1080,true,matched1080)||draw(1280,720,true,matched720))
+   return 230;
+ auto brightness=[](const std::vector<float>& rgb)->double{
+   double energy=0;
+   for(float value:rgb)energy+=std::isfinite(value)?value:0;
+   return energy/rgb.size();
+ };
+ const double raw_fhd=brightness(hd1080),raw_hd=brightness(hd720);
+ const double ref_fhd=brightness(matched1080),ref_hd=brightness(matched720);
+ if(raw_fhd<=1e-12||raw_hd<=1e-12||ref_fhd<=1e-12||ref_hd<=1e-12)
+   return 231;
+ const double raw_ratio=raw_hd/raw_fhd;
+ const double stable_ratio=ref_hd/ref_fhd;
+ std::cout<<"AE_RESOLUTION_ENERGY 1920x1080="<<raw_fhd
+          <<" 1280x720="<<raw_hd
+          <<" raw_720p_ratio="<<raw_ratio
+          <<" matched_720p_ratio="<<stable_ratio<<"\n";
+ if(hd1080!=matched1080)return 232;
+ if(raw_ratio<1.6||raw_ratio>2.9)return 233;
+ if(std::abs(stable_ratio-1.)>.13)return 234;
+ auto optical_shape=[](const std::vector<float>& rgb,int w,int h){
+   double mass=0,xm=0,ym=0,x2=0,y2=0;
+   for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+     const size_t k=(size_t(y)*w+x)*3;
+     const double l=.2126*rgb[k]+.7152*rgb[k+1]+.0722*rgb[k+2];
+     const double xn=(x+.5)/w,yn=(y+.5)/h;
+     mass+=l;xm+=l*xn;ym+=l*yn;x2+=l*xn*xn;y2+=l*yn*yn;
+   }
+   xm/=mass;ym/=mass;
+   return std::array<double,4>{xm,ym,std::sqrt(std::max(0.,x2/mass-xm*xm)),
+                                std::sqrt(std::max(0.,y2/mass-ym*ym))};
+ };
+ const auto hishape=optical_shape(matched1080,1920,1080);
+ const auto loshape=optical_shape(matched720,1280,720);
+ for(int k=0;k<4;k++)
+   if(std::abs(hishape[k]-loshape[k])>.01)return 235+k;
+ std::cout<<"AE_RESOLUTION_SHAPE_PASSED FHD=("<<hishape[0]<<","
+          <<hishape[1]<<","<<hishape[2]<<","<<hishape[3]
+          <<") 720p=("<<loshape[0]<<","<<loshape[1]<<","
+          <<loshape[2]<<","<<loshape[3]<<")\n";
+ return 0;
+}
+
 int main(){
  wchar_t exe[MAX_PATH]{};
  if(!GetModuleFileNameW(nullptr,exe,MAX_PATH))return 1;
@@ -499,10 +551,10 @@ int main(){
  in.pica_basicP=&basic;
  in.inter.add_param=&collect;
  in.inter.abort=&abort_ok;
- g_params.reserve(63);
+ g_params.reserve(64);
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE||
-    g_params.size()!=63||out.num_params!=64)return 4;
+    g_params.size()!=64||out.num_params!=65)return 4;
  g_params[55].u.bd.value=TRUE; // exercise optional real-host telemetry
  std::cout<<"SHIPPING_PARAMETER_DEFAULTS point=("<<FIX_2_FLOAT(g_params[0].u.td.x_value)
           <<","<<FIX_2_FLOAT(g_params[0].u.td.y_value)<<") radiance="
@@ -516,6 +568,7 @@ int main(){
  if(const int e=render(effect,in,640,360,PF_PixelFormat_ARGB64))return 20+e;
  if(const int e=render(effect,in,640,360,PF_PixelFormat_ARGB128))return 30+e;
  if(const int e=render_smart_empty(effect,in))return e;
+ if(const int e=validate_fhd_vs_720p(effect,in))return e;
  if(const int e=render_roi_and_downsample(effect,in))return e;
  if(const int e=validate_requested_rect_contract(effect,in))return e;
 #ifdef FLARELENS_HAVE_CUDA
@@ -556,7 +609,7 @@ int main(){
           <<"Catalog_Nikkor_Canon_Fuji_final_ID_1370\n";
  // Same prescription -> identical pixels; edited optical shape -> different
  // pixel field. This calls production AEX render with actual ARB data handle.
- if(g_params.size()!=63)return 204;
+ if(g_params.size()!=64)return 204;
  auto* doc=static_cast<fl::custom::Document*>(
       fl_mock::lock(g_params[61].u.arb_d.value));
  if(!doc||!fl::custom::valid(*doc))return 205;

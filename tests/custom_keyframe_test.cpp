@@ -35,7 +35,7 @@ int main(){
  if(!fx)return 3;
  PF_InData in{};fl_mock::configure(in);in.inter.add_param=&collect;
  PF_OutData out{};
- if(fx(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)||defs.size()!=63)return 4;
+ if(fx(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)||defs.size()!=64)return 4;
  const auto* initial=static_cast<fl::custom::Document*>(fl_mock::lock(defs[61].u.arb_d.value));
  if(!initial||!fl::custom::valid(*initial))return 5;
  auto left=*initial,right=left;

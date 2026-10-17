@@ -57,7 +57,7 @@ enum { P_INPUT=0,P_LIGHT,P_GAIN,P_GRID,P_FOV,P_THRESHOLD,P_AUTO,P_MAXSOURCES,
        P_PAIR_START,P_PAIR_MODE,P_PAIR_A,P_PAIR_B,P_PAIR_END,P_SOURCE_ALPHA,
        P_MANUAL_RADIANCE,P_HOST_TRACE,P_ADAPTIVE_PREVIEW,P_MANUAL_DIAMETER,
        P_LENS_SOURCE,P_CATALOG_INDEX,P_CATALOG_BROWSE,
-       P_CUSTOM_LENS,P_CUSTOM_CLONE,P_COUNT };
+       P_CUSTOM_LENS,P_CUSTOM_CLONE,P_FHD_STABLE_BRIGHTNESS,P_COUNT };
 constexpr auto kVersion=PF_VERSION(1,0,4,PF_Stage_RELEASE,0);
 #if defined(FLARELENS_HAVE_CUDA)
 constexpr auto kNativeGpuFramework=PF_GPU_Framework_CUDA;
@@ -81,6 +81,7 @@ struct FrameArgs {
  int ghost_blur_passes=3,haze_passes=3;
  bool preview=false,auto_seed=true,auto_detect=false,use_sensor=false,source_alpha=false;
  bool adaptive_preview=true;
+ bool fhd_stable_brightness=false; // experimental, existing projects unchanged
  bool host_trace=true;
  int preview_grid=12,preview_max=128,preview_step=8,preview_spectral=3;
  float fov_vertical=0,sensor_w=36,sensor_h=24,camera_focal=50;
@@ -227,6 +228,10 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def);
  PF_ADD_BUTTON("Initialize Custom Lens","Copy Catalog Lens to Custom",
                0,PF_ParamFlag_SUPERVISE,63);
+ // APPEND-ONLY: older AE projects retain their original parameter IDs.
+ // Off preserves exact Nuke energy scatter and published v1.0.4 appearance.
+ AEFX_CLR_STRUCT(def);
+ PF_ADD_CHECKBOX("Match FHD Flare Brightness","Enable (Manual Light)",FALSE,0,64);
  PF_CustomUIInfo ci{};
  ci.events=PF_CustomEFlag_EFFECT;
  ci.comp_ui_width=ci.comp_ui_height=0;
@@ -293,6 +298,7 @@ FrameArgs from_legacy(PF_InData* in_data,PF_ParamDef* params[]){
  a.pair_b=params[P_PAIR_B]->u.sd.value;
  a.source_alpha=params[P_SOURCE_ALPHA]->u.bd.value!=0;
  a.adaptive_preview=params[P_ADAPTIVE_PREVIEW]->u.bd.value!=0;
+ a.fhd_stable_brightness=params[P_FHD_STABLE_BRIGHTNESS]->u.bd.value!=0;
  return a;
 }
 
@@ -365,6 +371,7 @@ PF_Err checkout_args(PF_InData* in,FrameArgs& a){
  if((e=load(P_MANUAL_DIAMETER,[&](const PF_ParamDef& v){a.manual_diameter_px=float(v.u.fs_d.value);})))return e;
  if((e=load(P_HOST_TRACE,[&](const PF_ParamDef& v){a.host_trace=v.u.bd.value!=0;})))return e;
  if((e=load(P_ADAPTIVE_PREVIEW,[&](const PF_ParamDef& v){a.adaptive_preview=v.u.bd.value!=0;})))return e;
+ if((e=load(P_FHD_STABLE_BRIGHTNESS,[&](const PF_ParamDef& v){a.fhd_stable_brightness=v.u.bd.value!=0;})))return e;
  return PF_Err_NONE;
 }
 
@@ -380,9 +387,11 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
   // Nuke normally has one source per *image block*, not one per luminous
   // object. Compress a constant-radiance circular HDR patch into its
   // corresponding Nuke block-source sum without changing Fresnel or gain.
-  const float r=fl::nuke_equivalent_manual_radiance(
+  float r=fl::nuke_equivalent_manual_radiance(
       a.manual_radiance,a.manual_diameter_px,manual_scale_x,manual_scale_y,
       a.scan_step,a.max_sources);
+  if(a.fhd_stable_brightness)
+    r*=fl::fhd_reference_emission_scale(width,height);
   sources.push_back({px,py,r*a.tint_r,r*a.tint_g,r*a.tint_b});
   return sources;
  }
@@ -991,10 +1000,12 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       geometry.normalized_x(args.light_x):.5f;
    const float ly=std::isfinite(args.light_y)?
       geometry.normalized_y(args.light_y):.5f;
-   const float radiance=fl::nuke_equivalent_manual_radiance(
+   float radiance=fl::nuke_equivalent_manual_radiance(
      args.manual_radiance,args.manual_diameter_px,
      geometry.light_scale_x,geometry.light_scale_y,
      args.scan_step,args.max_sources);
+   if(args.fhd_stable_brightness)
+     radiance*=fl::fhd_reference_emission_scale(w,h);
    std::vector<fl::Source> sources;
    if(args.auto_detect){
     // The CPU stage receives tile metadata only. Input RGB remains on the

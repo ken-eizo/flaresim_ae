@@ -35,7 +35,7 @@ int main(){
  in.inter.add_param=&collect;
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)||
-    defs.size()!=63)return 4;
+    defs.size()!=64)return 4;
  // Regression: AE may dispatch lifecycle event selectors before an edit
  // document or params[] exists, e.g. when opening the ECW from timeline.
  for(const PF_EventType type:{PF_Event_NEW_CONTEXT,PF_Event_ACTIVATE,

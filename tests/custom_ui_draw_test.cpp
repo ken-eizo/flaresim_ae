@@ -109,7 +109,7 @@ int main(){
  in.inter.add_param=&collect;
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)||
-  defs.size()!=63)return 4;
+  defs.size()!=64)return 4;
  std::vector<PF_ParamDef*> ps(defs.size()+1);
  PF_ParamDef inparam{};ps[0]=&inparam;
  for(size_t i=0;i<defs.size();i++)ps[i+1]=&defs[i];

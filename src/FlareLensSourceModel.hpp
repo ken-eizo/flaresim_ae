@@ -18,6 +18,17 @@
 #include <cmath>
 
 namespace fl {
+// Opt-in experimental rendering policy: when the same optical sensor/FOV
+// is rasterized at different resolutions, raw bilinear splatting conserves
+// TOTAL energy, making fewer-pixel images brighter per pixel. Scale the
+// manual emitter's energy by the raster area relative to 1920x1080.
+// At FHD this is exactly 1, preserving all existing 1080p projects.
+// Input coordinates must refer to the ACTUAL optical render sensor, not the
+// source layer's full un-downsampled size.
+inline float fhd_reference_emission_scale(int width,int height) noexcept {
+ if(width<1||height<1||width>16384||height>16384)return 1.f;
+ return float(double(width)*double(height)/(1920.0*1080.0));
+}
 inline float nuke_equivalent_manual_radiance(float source_radiance,
  float full_resolution_diameter_px,float scale_x,float scale_y,
  int scan_step,int max_sources) noexcept {

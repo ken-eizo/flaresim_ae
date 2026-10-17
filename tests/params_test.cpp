@@ -30,7 +30,7 @@ int main(){
  PF_InData in{};fl_mock::configure(in);in.inter.add_param=&collect;
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr))return 4;
- if(out.num_params!=64||capture.size()!=63){
+ if(out.num_params!=65||capture.size()!=64){
   std::cerr<<"Count mismatch: out "<<out.num_params<<" callbacks "<<capture.size()<<"\n";
   return 5;
  }
@@ -106,6 +106,11 @@ int main(){
  if(capture[61].param_type!=PF_Param_ARBITRARY_DATA||
     !(capture[61].ui_flags&PF_PUI_CONTROL)||
     capture[62].param_type!=PF_Param_BUTTON)return 30;
+ // The new parameter is append-only and OFF by default. AE 2023-era
+ // projects must continue to render with the exact old Nuke weighting.
+ if(capture.size()!=64||
+    capture[63].param_type!=PF_Param_CHECKBOX||
+    capture[63].u.bd.dephault!=FALSE)return 44;
  // AE owns custom optical data. Exercise actual exported AEX arbitrary
  // callbacks including binary project serialization and text copy/paste.
  auto document=capture[61].u.arb_d.value;

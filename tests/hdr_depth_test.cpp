@@ -104,7 +104,7 @@ int main(){
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE)
   return 4;
- if(params.size()!=63)return 5;
+ if(params.size()!=64)return 5;
  constexpr int w=320,h=180;
  std::vector<float> f32,f16,f8;
  try{

@@ -371,7 +371,7 @@ int main(){
  in.inter.checkin_param=&checkin_param;
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE||
-    params.size()!=63)return 6;
+    params.size()!=64)return 6;
  PF_GPUDeviceSetupInput setup_input{PF_GPU_Framework_CUDA,0};
  PF_GPUDeviceSetupOutput setup_output{};
  PF_GPUDeviceSetupExtra setup_extra{&setup_input,&setup_output};

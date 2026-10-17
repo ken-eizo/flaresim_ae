@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #include "FlareLensMetal.hpp"
 #include "FlareLensCore.hpp"
+#include "FlareLensSourceModel.hpp"
 #include "FlareLensOptics.hpp"
 #include <atomic>
 #include <cmath>
@@ -291,6 +292,34 @@ int main(){
   view.input=(__bridge void*)in;
   view.haze_gain=0.f;
   std::cout<<"METAL_MINIMAL_SCRATCH_ALLOCATIONS_PASSED\n";
+  // The new FHD brightness option changes emission, not optical geometry.
+  // Verify that Metal scatter remains linear in source radiance and shares
+  // the CPU host's 720p/FHD manual-light normalization factor.
+  view.output_mode=2;
+  view.ghost_blur=0.f;
+  view.haze_gain=0.f;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+        (__bridge void*)one_image_buffer,single_ghost))return 92;
+  const float* unscaled=static_cast<const float*>(out.contents);
+  double raw_energy=0;
+  for(size_t i=0;i<n;i++)
+    raw_energy+=unscaled[i*4]+unscaled[i*4+1]+unscaled[i*4+2];
+  auto scaled_sources=sources;
+  const float scale=fl::fhd_reference_emission_scale(1280,720);
+  for(auto& source:scaled_sources){
+    source.r*=scale;source.g*=scale;source.b*=scale;
+  }
+  if(!fl::gpu::metal_compose(lens,scaled_sources,cfg,view,
+        (__bridge void*)one_image_buffer,single_ghost))return 93;
+  const float* scaled=static_cast<const float*>(out.contents);
+  double corrected_energy=0;
+  for(size_t i=0;i<n;i++)
+    corrected_energy+=scaled[i*4]+scaled[i*4+1]+scaled[i*4+2];
+  if(!(raw_energy>1e-8)||
+     std::abs(corrected_energy/raw_energy-double(scale))>1e-4)
+    return 94;
+  std::cout<<"METAL_FHD_REFERENCE_EMISSION_SCALE_PASSED"
+           <<" factor="<<scale<<" ratio="<<corrected_energy/raw_energy<<"\n";
   // Reported black result: same manual source must remain compositable when
   // the layer supplies a fully transparent BGRA32F frame. Test the GPU
   // composition path, not merely the standalone ghost-only buffer.

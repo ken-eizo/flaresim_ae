@@ -1,4 +1,5 @@
 #include "FlareLensCore.hpp"
+#include "FlareLensSourceModel.hpp"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -6,6 +7,12 @@
 #include <iostream>
 int main(){
  LensSystem lens;
+ // Manual intensity policy is a separate opt-in from upstream Nuke.
+ if(fl::fhd_reference_emission_scale(1920,1080)!=1.f||
+    std::abs(fl::fhd_reference_emission_scale(1280,720)-4.f/9.f)>1e-7f||
+    std::abs(fl::fhd_reference_emission_scale(960,540)-.25f)>1e-7f||
+    std::abs(fl::fhd_reference_emission_scale(3840,2160)-4.f)>1e-7f||
+    fl::fhd_reference_emission_scale(0,720)!=1.f)return 54;
  const auto path=std::filesystem::path(__FILE__).parent_path().parent_path()/
    "upstream/lenses/lens_files/AI_Nikkor_50mm_F1.2S.lens";
  if(!lens.load(path.string().c_str())){std::cerr<<"lens fixture could not load: "<<path<<"\n";return 1;}

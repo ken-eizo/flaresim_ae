@@ -95,7 +95,7 @@ int main(){
  host.inter.add_param=&add;host.inter.abort=&abort_ok;
  PF_OutData result{};
  if(effect(PF_Cmd_PARAMS_SETUP,&host,&result,nullptr,nullptr,nullptr)||
-    controls.size()!=63)return 4;
+    controls.size()!=64)return 4;
  if(controls[4].u.fs_d.dephault!=2.||controls[6].u.sd.dephault!=512||
     controls[54].u.fs_d.dephault!=64.||
     controls[57].u.fs_d.dephault!=96.)return 5;
