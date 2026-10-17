@@ -85,7 +85,7 @@ certify FlareSimAE.
    blur, preview, haze, detection, blank-input, invalid-resource and 4-thread
    concurrent rendering tests. CTest **Skipped** is never counted as GPU
    runtime proof. Both macOS 15 arm64 and x86_64 hosted runners executed
-   the Metal kernels successfully (CI `39038302118`). **These runners are
+   the Metal kernels successfully (final CI `39038673198`). **These runners are
    virtualized:** arm64 reports `Apple M1 (Virtual)`; x86_64 reports
    `Apple Paravirtualized Graphics Device`. This confirms MSL execution
    under both CPU ABIs, **not** performance or reliability on all physical
@@ -103,6 +103,30 @@ certify FlareSimAE.
 6. **Performance:** real AE composition profiler p50/p95/p99 and peak memory,
    using the *same* fixture across Intel and Apple Silicon, not a kernel-only
    speed comparison.
+
+## Evidence snapshot — 2026-10-17
+
+The exact tested development source commit is `fb0f20bd10006d185b10b1ba24b27fc9a64805d3`.
+[GitHub Actions run 39038673198](https://github.com/ken-eizo/flaresim_ae/actions/runs/39038673198)
+finished with **five successful jobs**, not a published Release.
+
+| CI environment | Compilation + PiPL/sign/ZIP | Actual Metal kernel execution |
+| --- | --- | --- |
+| macOS 14 arm64 hosted | PASS | NOT TESTED — no MTLDevice, CTest skipped |
+| macOS 15 arm64 virtual M1 | PASS | PASS — GPU math, empty input, bound checks, 4×3 parallel renders |
+| macOS 15 x86_64 virtual Intel | PASS | PASS — Apple Paravirtualized Metal GPU |
+| macOS 26 arm64 hosted | PASS | PASS — GPU math, empty input, bound checks, 4×3 parallel renders |
+| Cross-platform CPU optical core | PASS | Not a Metal test |
+
+Universal `x86_64` and `arm64` slices each report `LC_BUILD_VERSION minos 11.0`.
+No job runs actual Adobe After Effects. The separate Windows development
+regression build from commit `384ec23` passed all **25/25** Windows CTests;
+subsequent edits are macOS-only Metal, test, CI, and documentation paths.
+
+The original **v1.0.4 release and main branch have NOT been changed**.
+Do not promote this development branch until physical Intel/AMD/Apple GPUs,
+older supported macOS/AE versions, GPU resource teardown under MFR and
+low-memory fallback are validated in the relevant real hosts.
 
 **Unresolved:** This development CI cannot operate actual Adobe After Effects
 on a Mac or simulate all Apple hardware/drivers/macOS releases. Intel Metal GPU
