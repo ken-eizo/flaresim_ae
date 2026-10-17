@@ -843,7 +843,7 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  const auto& haze_sources=v.haze_sources?*v.haze_sources:sources;
  if(sources.empty()&&haze_sources.empty())return sync.finish();
  const bool ghost_mode=v.output_mode!=5 && settings.gain>0&&!sources.empty();
- const bool haze_mode=(v.output_mode==1||v.output_mode==2||v.output_mode==5)
+ const bool haze_mode=(v.output_mode==1||v.output_mode==5)
                      &&v.haze_gain>0&&!haze_sources.empty();
  if(!ghost_mode&&!haze_mode)return sync.finish();
  const bool need_blur=ghost_mode&&v.ghost_blur>0&&v.ghost_blur_passes>0;

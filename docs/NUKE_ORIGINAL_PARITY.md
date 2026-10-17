@@ -98,6 +98,12 @@ graphics and AE inside-host tests remain outstanding**.
 
 ## Full-pipeline source and post verification (October 18, 2026)
 
+The Nuke `flare.rgb` output contains only optically traced ghosts (with
+optional Ghost Blur). AE `Flare Only` now excludes Haze and Starburst,
+which are available separately through AE's output modes. AE's
+`Composite` mode remains an AE convenience and **cannot be confused
+with Nuke's individual named output channels**.
+
 The source of truth remains the **unmodified upstream implementation** at
 `0e28ead`. The AE port previously selected top-K candidates *before*
 clustering, used image-pixel distances instead of Nuke's angular distances,

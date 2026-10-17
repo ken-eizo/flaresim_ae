@@ -110,7 +110,7 @@ int main(){
     fl::box_blur_rgb(expected,c.w,c.h,radius,c.passes);
    }
   }
-  if(c.haze>0&&(c.mode==1||c.mode==2||c.mode==5)){
+  if(c.haze>0&&(c.mode==1||c.mode==5)){
    std::vector<float> haze;
    fl::render_haze(haze,haze_sources,c.w,c.h,c.haze,.15f,3,c.haze_footprint);
    if(haze.size()!=expected.size())return 7;

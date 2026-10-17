@@ -566,8 +566,8 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
  // Nuke's auxiliary named channels become explicit, useful AE output modes.
  const int mode=std::clamp(args.output_mode,1,8);
  const bool render_ghost=(mode<=2||mode==4||mode==7||mode==8);
- const bool render_haze_pass=(mode<=2||mode==5);
- const bool render_star_pass=(mode<=2||mode==6);
+ const bool render_haze_pass=(mode==1||mode==5);
+ const bool render_star_pass=(mode==1||mode==6);
  LensSystem local_custom;
  const LensSystem* lens=selected_lens(args,local_custom);
  if(!lens){
@@ -1055,7 +1055,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
    }
    const bool need_ghost_blur=args.output_mode!=5&&
       args.ghost_blur>0&&args.ghost_blur_passes>0;
-   const bool haze_active=(args.output_mode==1||args.output_mode==2||
+   const bool haze_active=(args.output_mode==1||
        args.output_mode==5)&&args.haze_gain>0;
    const bool reduced_haze=args.preview||
      (args.adaptive_preview&&((in->downsample_x.num>0&&

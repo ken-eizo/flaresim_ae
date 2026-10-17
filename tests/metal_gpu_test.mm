@@ -96,6 +96,22 @@ int main(){
   std::cout<<"METAL_GHOST_BLUR_CPU_PARITY relL1="
            <<blur_diff/blur_energy<<"\n";
   view.ghost_blur=0.f;
+  // Original Nuke flare.rgb contains GHOSTS only. Nonzero Haze should
+  // appear in its separate haze.rgb channel, not the flare.rgb output.
+  view.output_mode=2;
+  view.haze_gain=0.f;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+       (__bridge void*)scratch,scratch_bytes))return 113;
+  const auto* ghost_pixels=static_cast<const float*>(out.contents);
+  std::vector<float> ghost_without_haze(ghost_pixels,ghost_pixels+n*4);
+  view.haze_gain=100.f;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+       (__bridge void*)scratch,scratch_bytes))return 114;
+  const auto* ghost_with_haze=static_cast<const float*>(out.contents);
+  for(size_t i=0;i<n*4;i++)
+    if(std::abs(double(ghost_without_haze[i])-ghost_with_haze[i])>1e-6)return 115;
+  view.haze_gain=0.f;
+  std::cout<<"METAL_NUKE_FLARE_RGB_EXCLUDES_HAZE_PASSED\n";
   view.output_mode=3;
   if(!fl::gpu::metal_compose(lens,sources,cfg,view,
        (__bridge void*)scratch,scratch_bytes))return 40;

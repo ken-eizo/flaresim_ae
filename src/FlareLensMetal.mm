@@ -328,7 +328,7 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
  if(sources.empty()||((settings.gain<=0||v.output_mode==5)&&
     (v.haze_gain<=0||v.output_mode==4)))return finish(cmd);
  const bool ghosts=settings.gain>0&&v.output_mode!=5&&!sources.empty();
- const bool haze=(v.output_mode==1||v.output_mode==2||v.output_mode==5)&&
+ const bool haze=(v.output_mode==1||v.output_mode==5)&&
    v.haze_gain>0&&!haze_sources.empty();
  const bool dense_haze=haze&&(haze_sources.size()>8||v.haze_footprint>1);
  const bool blurred_ghosts=ghosts&&v.ghost_blur>0&&v.ghost_blur_passes>0;
