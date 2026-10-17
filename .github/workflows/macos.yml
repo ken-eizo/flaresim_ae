@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-15-intel]
+        os: [macos-14, macos-15, macos-15-intel, macos-26]
     # SDK is restored from encrypted Actions secrets; no proprietary SDK
     # content is committed or published in CI artifacts.
     runs-on: ${{ matrix.os }}
@@ -103,15 +103,10 @@ jobs:
           cmake --build build-macos-ae --target FlareLensMetalGpuTest --parallel 3
           set -o pipefail
           ctest --test-dir build-macos-ae -R FlareLensMetalGpuTest --output-on-failure --verbose | tee "$RUNNER_TEMP/metal-test.log"
-          # A skipped GPU test is not evidence of working Metal kernels.
-          # The Apple Silicon runner must actually run the kernels.
-          if [[ "$(uname -m)" == "arm64" ]]; then
-            grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"
-          else
-            if ! grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"; then
-              echo "::notice::Intel runner has no accessible Metal GPU: native Intel binary was compiled, but Intel GPU execution remains unverified"
-            fi
-          fi
+          # Build-only or CTest "Skipped" is not GPU verification on ANY
+          # Mac. Both Intel and Apple Silicon must execute each kernel path.
+          grep -q 'METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED' "$RUNNER_TEMP/metal-test.log"
+          grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
       - name: Check native bundle and architectures
         shell: bash
         run: |

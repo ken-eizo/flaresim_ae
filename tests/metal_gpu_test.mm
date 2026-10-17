@@ -3,8 +3,10 @@
 #include "FlareLensMetal.hpp"
 #include "FlareLensCore.hpp"
 #include "FlareLensOptics.hpp"
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <thread>
 #include <filesystem>
 #include <iostream>
 #include <vector>
@@ -210,6 +212,54 @@ int main(){
     break;
   }
   std::cout<<"METAL_RESOURCE_BOUNDS_AND_DEVICE_ISOLATION_PASSED\n";
+  // Simulate independent AE MFR callbacks on one host-owned Metal device.
+  // Each callback owns its queue, buffers and scratch; immutable pipelines
+  // are intentionally shared through the backend's device-keyed cache.
+  std::atomic<int> mfr_failures{0};
+  std::vector<std::thread> workers;
+  for(int worker=0;worker<4;worker++){
+    workers.emplace_back([&,worker]{
+      @autoreleasepool {
+        auto local_queue=[dev newCommandQueue];
+        auto local_src=[dev newBufferWithBytes:bg.data() length:bytes
+            options:MTLResourceStorageModeShared];
+        auto local_dst=[dev newBufferWithLength:bytes
+            options:MTLResourceStorageModeShared];
+        auto local_scratch=[dev newBufferWithLength:scratch_bytes
+            options:MTLResourceStorageModePrivate];
+        if(!local_queue||!local_src||!local_dst||!local_scratch){
+          mfr_failures.fetch_add(1);return;
+        }
+        fl::gpu::View local_view{
+          (__bridge void*)local_src,(__bridge void*)local_dst,w,h,w*16,w*16};
+        local_view.command_stream=(__bridge void*)local_queue;
+        local_view.output_mode=2;
+        for(int iteration=0;iteration<3;iteration++){
+          if(!fl::gpu::metal_compose(lens,sources,cfg,local_view,
+              (__bridge void*)local_scratch,scratch_bytes)){
+            mfr_failures.fetch_add(1);return;
+          }
+          const auto* data=static_cast<const float*>(local_dst.contents);
+          double deviation=0;
+          for(size_t i=0;i<n;i++)for(int c=0;c<3;c++){
+            const float value=data[i*4+2-c];
+            if(!std::isfinite(value)){
+              mfr_failures.fetch_add(1);return;
+            }
+            deviation+=std::abs(double(value)-reference.rgb[i*3+c]);
+          }
+          double total=0;
+          for(const float v:reference.rgb)total+=std::abs(double(v));
+          if(total<1e-8||deviation/total>.08){
+            mfr_failures.fetch_add(1);return;
+          }
+        }
+      }
+    });
+  }
+  for(auto& worker:workers)worker.join();
+  if(mfr_failures.load()!=0)return 64;
+  std::cout<<"METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED\n";
   return 0;
  }
 }
