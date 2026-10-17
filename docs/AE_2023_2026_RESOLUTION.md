@@ -118,3 +118,33 @@ Keep OFF-by-default until (a) user visual review, (b) CPU/GPU parity for
 manual emitter across FHD/720p, (c) no regression with existing projects,
 and (d) AE 2023–2026 loader/runtime qualification. Do **not** publish
 a Release from this development branch.
+
+## Verified implementation snapshot (2026-10-17)
+
+Development **source and tests:** `27f78089cacb3167b80df171eece5266df0c270a`.
+Documentation is committed separately from the source. The following
+checks explicitly succeeded; none launches After Effects 2023–2026:
+
+- [macOS multi-version development CI](https://github.com/ken-eizo/flaresim_ae/actions/runs/39041708711):
+  5/5 jobs successful. macOS 15 arm64, macOS 15 Intel x86_64, and macOS
+  26 arm64 virtual GPU runs execute `METAL_FHD_REFERENCE_EMISSION_SCALE_PASSED`,
+  with expected `factor=0.444444`, observed optical energy
+  `ratio=0.444444`. The test also executes directly with the Metal
+  library **extracted from the packaged development ZIP**.
+  macOS 14 compiled/bundled/signed successfully, but no Metal device
+  was available in the hosted runner: GPU runtime is **unverified**.
+- Windows full project CTest suite: **25/25 passed**, with the new
+  compiled AEX render-size and brightness test.
+- Actual Windows AEX against mocked AE host: raw 720p/FHD mean HDR
+  intensity ratio `2.24992`, opt-in ratio `0.999966`, FHD bytes
+  unchanged. Normalized intensity-weighted X/Y centroid/spread
+  `(0.471231, 0.477174, 0.269591, 0.281201)` at FHD and
+  `(0.471253, 0.477197, 0.269573, 0.281204)` at 720p.
+- Default **OFF** preserves published output and all existing parameter
+  IDs; the new param is appended at ID=64. This has **not** been
+  loaded in real AE 2023/2024/2025/2026 as part of this audit.
+
+Windows NVIDIA CUDA-specific render output at FHD/720p is covered by
+the shared host-side source energy adjustment and successful Windows
+regression suite, **not** by an additional end-to-end paired CUDA
+device pixel-brightness test. That GPU-specific validation remains open.
