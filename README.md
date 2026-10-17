@@ -13,4 +13,6 @@ An open-source lens flare effect for **Adobe After Effects**, based on
 Unzip, copy the plug-in into your After Effects Plug-ins folder, then restart.
 See [INSTALL.md](INSTALL.md) for details.
 
+This project is not a "direct port" of filmsim_nuke; the author has incorporated original optimizations and features specifically for After Effects.
+
 MIT license. Credits and third-party notices: [NOTICE.md](NOTICE.md).
