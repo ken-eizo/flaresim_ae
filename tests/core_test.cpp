@@ -1,4 +1,5 @@
 #include "FlareLensCore.hpp"
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <filesystem>
@@ -41,6 +42,44 @@ int main(){
     visible.diagnostics.sensor_hits<1||
     visible.diagnostics.screen_samples<1||
     !(visible.diagnostics.max_luminance>0.f))return 8;
+ // A constant lens/FOV/source in Nuke scales with the output FORMAT:
+ // changing 16:9 resolution changes pixel size, not the normalized physical
+ // footprint. An accidental fixed-pixel flare will fail these moments.
+ const auto smaller=fl::render_cpu(lens,{{.5f,.5f,1,1,1}},
+                                   default_ae,160,90);
+ if(smaller.rgb.size()!=size_t(160)*90*3)return 51;
+ auto centroid=[](const fl::Image& img){
+  double mass=0,cx=0,cy=0;
+  for(int y=0;y<img.height;y++)for(int x=0;x<img.width;x++){
+   const size_t k=(size_t(y)*img.width+x)*3;
+   const double value=.2126*img.rgb[k]+.7152*img.rgb[k+1]+.0722*img.rgb[k+2];
+   if(!std::isfinite(value)||value<0)return std::array<double,3>{-1,-1,-1};
+   mass+=value;cx+=value*((x+.5)/img.width);
+   cy+=value*((y+.5)/img.height);
+  }
+  return std::array<double,3>{mass,mass>0?cx/mass:0,mass>0?cy/mass:0};
+ };
+ const auto hi=centroid(visible),lo=centroid(smaller);
+ if(hi[0]<=0||lo[0]<=0||
+    std::abs(hi[1]-lo[1])>.035||std::abs(hi[2]-lo[2])>.035){
+   std::cerr<<"NUKE_FORMAT_RESOLUTION_INVARIANCE_FAILED hi=("
+     <<hi[0]<<","<<hi[1]<<","<<hi[2]<<") lo=("
+     <<lo[0]<<","<<lo[1]<<","<<lo[2]<<")\n";
+   return 52;
+ }
+ // A central light is symmetric and could conceal a fixed-pixel mapping.
+ // Confirm the SAME angular emitter away from centre tracks resolution.
+ const auto shifted_hi=fl::render_cpu(lens,{{.62f,.43f,1,1,1}},
+                                      default_ae,320,180);
+ const auto shifted_lo=fl::render_cpu(lens,{{.62f,.43f,1,1,1}},
+                                      default_ae,160,90);
+ const auto sh=centroid(shifted_hi),sl=centroid(shifted_lo);
+ if(sh[0]<=0||sl[0]<=0||
+    std::abs(sh[1]-sl[1])>.035||std::abs(sh[2]-sl[2])>.035)
+   return 53;
+ std::cout<<"NUKE_FORMAT_RESOLUTION_INVARIANCE_PASSED 320x180->160x90 "
+          <<"centroid normalized "<<sh[1]<<","<<sh[2]
+          <<" -> "<<sl[1]<<","<<sl[2]<<"\n";
  // Ray-hit preview must be independent of Fresnel strength/gain.
  default_ae.debug_ray_density=true;
  default_ae.gain=0;

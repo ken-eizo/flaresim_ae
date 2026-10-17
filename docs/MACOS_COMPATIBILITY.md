@@ -134,3 +134,127 @@ execution may be unavailable on a hosted virtual Intel runner. macOS 11–14
 in-host runtime remains unverified until exercised on those OS releases.
 CPU fallback after host GPU memory-allocation failure must be verified inside
 AE; the current hard memory gate does not establish low-memory safety.
+
+
+## 2026-10-17: Reported all-black rendering — evidence and reproduction
+
+A user has reportedly seen a fully black frame with **published v1.0.4**.
+No original machine specs, AE build, project, pixel-depth, screenshots, or
+trace have been supplied. This is a genuine **unconfirmed report**, not a
+closed defect. The public v1.0.4 Release remains untouched.
+
+**Confirmed defect in the published Mac source:** the Metal optical plate
+kernel unconditionally read `input [[buffer(0)]]`, even for Flare Only,
+Ghost Only and Haze Only. The development branch provides a separate
+`fl_plate_empty` kernel with NO required input binding. This removes a
+plausible invalid-buffer/blank-render cause; we cannot claim that it
+explains every black frame reported by users.
+
+**Verified negative case:** the shipping AEX's original, real parameter
+defaults (Light Position fixed coordinates `50,50`, radiance `64`,
+diameter `96`, gain `1000`) rendered non-black pixels from a
+transparent layer at **640×360 8bpc** in the actual compiled Windows
+EffectMain mock-host exercise (not live AE). This disproves a *universal*
+CPU-initial-defaults-is-black failure, not all GPU/host scenarios.
+
+**Added regression:** Metal 32-bit float Composite now renders a fully
+zero BGRA/alpha input and rejects all-blank RGB or RGB without alpha;
+it complements the existing Flare Only/empty input test. The packaged
+download is now extracted and the actual packaged `.metallib` is
+loaded and run by a standalone GPU test, rather than assuming the
+CI-generated `.metallib` matches a valid downloadable asset.
+
+Remaining separate diagnoses: real AE CUDA/Metal GPU command selection,
+effect video cache / 2025 host regressions, dynamic data fields,
+nonmatching source versus composition sizes, absent source-detection
+threshold hits, 8bpc quantization of faint physical ghost rays, and
+different lens/FOV/pair choices. Use `Output Mode → Sources Preview`
+(to check emission/detection), `Ray Hits Preview` (to check physical
+sensor hits), `Optical Diagnostics` (to inspect the render stages),
+and `Development Host Trace` if reproducing a black frame. This is
+observability, not proof that the underlying fault is fixed.
+
+Adobe separately documents fixes to **black preview/render flashes** and
+**effects extending layer bounds** in After Effects **25.5**. A host
+25.4-specific report must be distinguished from a FlareSimAE defect:
+https://helpx.adobe.com/after-effects/desktop/troubleshooting/fixed-and-known-issues/fixed-issues.html
+
+## AE 2024–2026: API architecture and qualification
+
+| AE host | Adobe macOS minimum | Relevant behavior | Current product evidence |
+| --- | --- | --- | --- |
+| 24.x (2024) | macOS 12 Monterey | ARM64 native; no Rosetta AE24 | SDK source/architecture eligible, **host untested** |
+| 25.0–25.3.2 (2025) | Monterey supported for older 25.x; check each build | SmartFX + GPU path already existed | **host untested** |
+| 25.4–25.6 (2025) | macOS 13 Ventura | AE 25.5 includes black flash/extended-bounds host fixes | **host untested** |
+| 26.0–26.5 (2026) | macOS 14 Sonoma | SDK guide updated in 26.5; existing Effect API path should be reviewed for each host build | User confirmed Mac plugin load on an **unspecified AE version**; 26.x host qualification pending |
+
+Adobe sources:
+- 24.x: https://helpx.adobe.com/jp/after-effects/desktop/get-started/technical-requirements/2024.html
+- 25.x: https://helpx.adobe.com/jp/after-effects/desktop/get-started/technical-requirements/2025.html
+- 26.x: https://helpx.adobe.com/jp/after-effects/desktop/get-started/technical-requirements/system-requirements.html
+- Apple Silicon/Rosetta: https://helpx.adobe.com/uk/after-effects/desktop/get-started/technical-requirements/after-effects-apple-silicon.html
+- Adobe SDK multi-version practice: https://ae-plugins.docsforadobe.dev/intro/compatibility-across-multiple-versions/
+
+**AEIG archaeological boundaries reviewed:**
+- `docs/reference/api-completeness-status.md`: SDK 25.6 vs guide
+  26.5 identifier delta; a difference in documented identifiers is
+  **not** evidence that this effect needs different binaries.
+- `docs/host-integration/cpp-sdk/platform-header-parity.md`:
+  normalized 25.6 Mac/Win header semantics are identical, but does not
+  prove binary or host behavior.
+- `docs/host-integration/cpp-sdk/verified-render-contracts.md`:
+  SmartFX pre-render checkout, clipped `result_rect`, intrinsic
+  `max_result_rect`, zero alpha and dependency/teardown correctness.
+- `docs/host-integration/cpp-sdk/independent-abi-reimplementations.md`:
+  suite layouts may not be prefix compatible across *historical* host
+  generations. Never blindly substitute a newer suite table for an older.
+- `docs/gpu-system/cross-platform-effect-architecture.md` and
+  `docs/gpu-system/release-qualification-matrix.md`: device ownership,
+  host-issued GPU Worlds, MFR, conservative GPU completion, evidence grades.
+- `docs/ui-system/effect-controls-custom-ui/cross-platform-compatibility.md`:
+  separate UI/Retina/macOS lifetime and host version requirements.
+
+The official GPU SmartFX API dates to **AE 16.0**, and the modern MFR
+contract to **AE 22.x**, so our dependencies are not inherently new in
+24–26. Adobe generally advises using the newest SDK and testing each AE
+version, with runtime feature/host checks where needed. This project
+builds with distributed **SDK 25.6** and currently packages one Universal
+Mac plugin and one Windows x64 CUDA/CPU AEX. **Universal** means native
+`x86_64` + `arm64` Mach-O slices; it does NOT establish loader/
+renderer qualification against AE 24, 25, and 26 on distinct machines.
+Older AE versions before 24, Adobe-unsupported OS/CPUs, and native
+Windows-on-Arm are NOT covered by the current single release.
+
+## Nuke source-of-truth: resolution and optical cropping
+
+The original [LocalStarlight/flaresim_nuke](https://github.com/LocalStarlight/flaresim_nuke)
+`src/ghost_cuda.cu` uses the **format width and height** to map a
+ray's physical sensor landing point to image coordinates:
+`px=(position.x/(2*sensor_half_w)+0.5)*fmt_w+fmt_x0_in_buf`,
+and an analogous `py`. The `fmt_x0_in_buf` term keeps the optical
+axis tied to the Nuke **format**, not a variable-expanded bounding box.
+`src/FlareSim.cpp` computes the sensor halves from lens focal length
+and horizontal/vertical camera field of view. Auto vertical FOV follows
+the **format aspect ratio**, not an arbitrary bounding-box crop.
+
+FlareSimAE's CPU and Metal ray tracers use the same normalized
+millimetre→pixel mapping for their full optical sensor. A pure
+1920×1080→960×540 resolution change at unchanged FOV/source positions
+should preserve the **relative** ghost footprint; the 2D position/size
+in physical pixels scales down. Photons outside the sensor aperture/FOV
+are clipped **in both implementations**. Changing aspect ratio, FOV or
+source layer geometry can alter the portion that falls inside the sensor.
+
+A real AE difference still needs host validation: AE SmartFX currently
+anchors the intrinsic optical extent to `PF_InData.width/height`
+(the source layer), whereas the Nuke kernel anchors to the complete
+Nuke **format** and has a separate output-bounding-box offset. Thus
+a small source layer inside a large AE comp may clip a flare by design
+of the current AE adapter, even if simply lowering preview resolution
+at constant frame aspect should not. Do **not** silently change the
+physical FOV/size or expand `max_result_rect` without host/ROI contract
+testing: Adobe warns invalid rectangles can corrupt the render graph.
+
+A CPU optical fixture now compares normalized energy centroids for
+320×180 vs 160×90 at the same FOV, both centred and with a shifted
+emitter; AE legacy ROI/downsampling pixel parity also remains covered.

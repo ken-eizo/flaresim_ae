@@ -49,7 +49,8 @@ static SPErr SPAPI release(const char*,int32){return 0;}
 
 static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
                   int mode=1,int quick_preset=1,int catalog_id=0,
-                  std::vector<float>* snapshot=nullptr,bool custom=false){
+                  std::vector<float>* snapshot=nullptr,bool custom=false,
+                  bool shipping_defaults=false){
  g_format=format;
  const size_t stride=format==PF_PixelFormat_ARGB128?sizeof(PF_PixelFloat):
                      format==PF_PixelFormat_ARGB64?sizeof(PF_Pixel16):sizeof(PF_Pixel);
@@ -70,13 +71,17 @@ static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
  input_param.param_type=PF_Param_LAYER;
  input_param.u.ld=input;
  auto definitions=g_params;
- definitions[0].u.td.x_value=FLOAT2FIX(w*.38f);
- definitions[0].u.td.y_value=FLOAT2FIX(h*.30f);
+ if(!shipping_defaults){
+  definitions[0].u.td.x_value=FLOAT2FIX(w*.38f);
+  definitions[0].u.td.y_value=FLOAT2FIX(h*.30f);
+ }
  // Confirm manual emitter and normal compositing, with no detection.
  definitions[5].u.bd.value=FALSE; // Detect Bright Sources: P_AUTO=6 => capture[5]
  definitions[10].u.pd.value=mode; // Output Mode: P_OUTPUT_MODE=11 => capture[10]
- definitions[54].u.fs_d.value=1000.; // legacy raw point regression
- definitions[57].u.fs_d.value=0.; // optical regression uses point, not area
+ if(!shipping_defaults){
+  definitions[54].u.fs_d.value=1000.; // legacy raw point regression
+  definitions[57].u.fs_d.value=0.; // optical regression uses point, not area
+ }
  definitions[8].u.pd.value=quick_preset;
  definitions[58].u.pd.value=custom?2:1; // custom or complete catalog
  definitions[59].u.sd.value=catalog_id?catalog_id:1;
@@ -499,6 +504,14 @@ int main(){
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE||
     g_params.size()!=63||out.num_params!=64)return 4;
  g_params[55].u.bd.value=TRUE; // exercise optional real-host telemetry
+ std::cout<<"SHIPPING_PARAMETER_DEFAULTS point=("<<FIX_2_FLOAT(g_params[0].u.td.x_value)
+          <<","<<FIX_2_FLOAT(g_params[0].u.td.y_value)<<") radiance="
+          <<g_params[54].u.fs_d.value<<" diameter="<<g_params[57].u.fs_d.value
+          <<" gain="<<g_params[1].u.fs_d.value<<"\n";
+ // Do NOT replace the defaults with a test-only 1000-radiance point.
+ // Users report fully black initial images; exercise shipping parameters.
+ if(const int e=render(effect,in,640,360,PF_PixelFormat_ARGB32,
+                       1,1,0,nullptr,false,true))return 220+e;
  if(const int e=render(effect,in,960,540,PF_PixelFormat_ARGB32))return 10+e;
  if(const int e=render(effect,in,640,360,PF_PixelFormat_ARGB64))return 20+e;
  if(const int e=render(effect,in,640,360,PF_PixelFormat_ARGB128))return 30+e;

@@ -5,6 +5,7 @@
 #include "FlareLensOptics.hpp"
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <thread>
 #include <filesystem>
@@ -290,6 +291,34 @@ int main(){
   view.input=(__bridge void*)in;
   view.haze_gain=0.f;
   std::cout<<"METAL_MINIMAL_SCRATCH_ALLOCATIONS_PASSED\n";
+  // Reported black result: same manual source must remain compositable when
+  // the layer supplies a fully transparent BGRA32F frame. Test the GPU
+  // composition path, not merely the standalone ghost-only buffer.
+  std::memset(in.contents,0,bytes);
+  view.input=(__bridge void*)in;
+  view.output_mode=1;
+  view.haze_gain=0.f;
+  view.ghost_blur=0.f;
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
+       (__bridge void*)one_image_buffer,single_ghost))return 89;
+  const float* composite=static_cast<const float*>(out.contents);
+  double visible_rgb=0,visible_alpha=0;
+  size_t orphan_rgb=0;
+  for(size_t i=0;i<n;i++){
+    const float b=composite[4*i],g=composite[4*i+1],
+                r=composite[4*i+2],a=composite[4*i+3];
+    if(!std::isfinite(b)||!std::isfinite(g)||!std::isfinite(r)||
+       !std::isfinite(a)||a<0.f||a>1.f)return 90;
+    const float rgb=std::max({b,g,r});
+    if(rgb>1.f/255.f&&a<=0.f)orphan_rgb++;
+    if(rgb>1.f/255.f&&a>0.f){
+      visible_rgb+=rgb;visible_alpha+=a;
+    }
+  }
+  if(visible_rgb<=0.001||visible_alpha<=0.001||orphan_rgb!=0)return 91;
+  std::cout<<"METAL_TRANSPARENT_COMPOSITE_NOT_BLACK_PASSED"
+           <<" rgb="<<visible_rgb<<" alpha="<<visible_alpha<<"\n";
+
   // Simulate independent AE MFR callbacks on one host-owned Metal device.
   // Each callback owns its queue, buffers and scratch; immutable pipelines
   // are intentionally shared through the backend's device-keyed cache.
