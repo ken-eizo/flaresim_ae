@@ -76,16 +76,16 @@ struct FrameArgs {
  int grid=64,max_sources=512,output_mode=1;
  int lens_source=1,catalog_index=1;
  fl::custom::Document custom_lens{};
- int aperture_blades=0,spectral=3,jitter=2,seed=0,pair_mode=0,pair_a=1,pair_b=2;
+ int aperture_blades=0,spectral=3,jitter=0,seed=0,pair_mode=0,pair_a=1,pair_b=2;
  float aperture_rotation=0,source_cap=0;
  int scan_step=4,cluster_radius=0;
- float ghost_blur=.0008f,haze_gain=0,haze_radius=.15f,star_gain=0,star_scale=.15f;
+ float ghost_blur=.003f,haze_gain=0,haze_radius=.15f,star_gain=0,star_scale=.15f;
  int ghost_blur_passes=3,haze_passes=3;
  bool preview=false,auto_seed=true,auto_detect=false,use_sensor=false,source_alpha=false;
- bool adaptive_preview=true;
+ bool adaptive_preview=false;
  bool fhd_stable_brightness=false; // experimental, existing projects unchanged
  bool host_trace=true;
- int preview_grid=12,preview_max=128,preview_step=8,preview_spectral=3;
+ int preview_grid=16,preview_max=100,preview_step=8,preview_spectral=3;
  float fov_vertical=0,sensor_w=36,sensor_h=24,camera_focal=50;
 };
 
@@ -157,7 +157,7 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Aperture Blades",0,16,0,16,0,14);
  AEFX_CLR_STRUCT(def); PF_ADD_ANGLE("Aperture Rotation",0,15);
  AEFX_CLR_STRUCT(def); PF_ADD_POPUP("Spectral Samples",5,1,"3 RGB|5 Wavelengths|7 Wavelengths|9 Wavelengths|11 Wavelengths",16);
- AEFX_CLR_STRUCT(def); PF_ADD_POPUP("Pupil Sampling",4,4,"Regular|Stratified|Halton|Golden Angle",17);
+ AEFX_CLR_STRUCT(def); PF_ADD_POPUP("Pupil Sampling",4,1,"Regular|Stratified|Halton|Golden Angle",17);
  AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Jitter Seed",0,65535,0,1000,0,18);
  AEFX_CLR_STRUCT(def); PF_ADD_CHECKBOX("Auto Jitter Seed","On",TRUE,0,19);
  AEFX_CLR_STRUCT(def); PF_END_TOPIC(20);
@@ -167,8 +167,8 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Cluster Radius",0,500,0,150,0,24);
  AEFX_CLR_STRUCT(def); PF_END_TOPIC(25);
  AEFX_CLR_STRUCT(def); PF_ADD_TOPICX("Optical Post-Processing",PF_ParamFlag_START_COLLAPSED,26);
- AEFX_CLR_STRUCT(def); PF_ADD_FLOAT_SLIDER("Ghost Blur Radius",0,1,0,.1f,0,.0008f,4,0,0,27);
- AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Ghost Blur Passes",1,6,1,6,2,28);
+ AEFX_CLR_STRUCT(def); PF_ADD_FLOAT_SLIDER("Ghost Blur Radius",0,1,0,.1f,0,.003f,4,0,0,27);
+ AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Ghost Blur Passes",1,6,1,6,3,28);
  AEFX_CLR_STRUCT(def); PF_ADD_FLOAT_SLIDER("Veiling Haze Gain",0,10000,0,1000,0,0,2,0,0,29);
  AEFX_CLR_STRUCT(def); PF_ADD_FLOAT_SLIDER("Haze Radius",0,1,0,.5f,0,.15f,3,0,0,30);
  AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Haze Blur Passes",1,6,1,6,3,31);
@@ -177,8 +177,8 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def); PF_END_TOPIC(34);
  AEFX_CLR_STRUCT(def); PF_ADD_TOPICX("Interactive Preview",PF_ParamFlag_START_COLLAPSED,35);
  AEFX_CLR_STRUCT(def); PF_ADD_CHECKBOX("Use Preview Quality","Enable",FALSE,0,36);
- AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Preview Ray Grid",2,128,2,64,12,37);
- AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Preview Max Sources",1,256,1,128,128,38);
+ AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Preview Ray Grid",2,128,2,64,16,37);
+ AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Preview Max Sources",1,256,1,128,100,38);
  AEFX_CLR_STRUCT(def); PF_ADD_SLIDER("Preview Scan Step",1,32,1,16,8,39);
  AEFX_CLR_STRUCT(def); PF_ADD_POPUP("Preview Spectral",5,1,"3 RGB|5 Wavelengths|7 Wavelengths|9 Wavelengths|11 Wavelengths",40);
  AEFX_CLR_STRUCT(def); PF_END_TOPIC(41);
@@ -204,7 +204,7 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def);
  PF_ADD_CHECKBOX("Development Host Trace","On",FALSE,0,56);
  AEFX_CLR_STRUCT(def);
- PF_ADD_CHECKBOX("Adaptive Quality for Reduced Resolution","Enable",TRUE,0,57);
+ PF_ADD_CHECKBOX("Adaptive Quality for Reduced Resolution","Enable",FALSE,0,57);
  AEFX_CLR_STRUCT(def);
  // The 96 px luminous disk, at scene-linear 64 RGB and Nuke's 4x4 scan,
  // represents ~452 HDR blocks: ~28,953 source energy without a

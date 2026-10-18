@@ -144,6 +144,22 @@ end-to-end identity. Comparisons of unmodified Nuke's final `source.rgb`,
 `haze.rgb`, `starburst.rgb`, and named channel streams still require
 actual Nuke rendered outputs as golden images.
 
+### Original Nuke constructor defaults for NEW AE instances
+
+Original `FlareSim.cpp` uses **Regular (no Pupil Jitter)**,
+`Ghost Blur=0.003`, `Ghost Blur Passes=3`,
+`Preview Ray Grid=16`, and `Preview Max Sources=100`.
+The AE port used to default to Golden Angle, `0.0008` blur,
+two passes, preview grid 12 and preview cap 128 respectively.
+Those defaults now match Nuke. Nuke's explicit `Preview Mode`
+is distinct from AE host resolution: **Adaptive Quality for Reduced Resolution
+now defaults OFF**; it remains an explicit opt-in performance tradeoff.
+
+This changes newly inserted AE effect defaults, not serialized parameter
+indices or existing keyframed project values. The manual Light Position
+emitter remains AE-specific by design, so Nuke's automatic HDR-input
+source-detection default is not implied by this change.
+
 ### AE-specific behavior that must not silently replace Nuke
 
 The intended optical additions are **Golden Angle pupil sampling** and the

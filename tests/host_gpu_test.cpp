@@ -182,6 +182,8 @@ static int one_render(Main effect,PF_InData& in,int mode,
  params[54].u.fs_d.value=30000.;
  params[57].u.fs_d.value=0.; // regression for legacy point light
  params[55].u.bd.value=FALSE; // No trace log from mock host
+ params[56].u.bd.value=adaptive?TRUE:FALSE; // opt-in AE adaptive preview; Nuke-exact default OFF
+ if(adaptive)params[36].u.sd.value=12; // fixture's explicit reduced ray grid; pristine default is 16
  PF_PreRenderCallbacks pre_callbacks{};
  pre_callbacks.checkout_layer=&checkout_layer;
  PF_PreRenderInput pre_input{};

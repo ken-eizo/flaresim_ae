@@ -78,17 +78,20 @@ int main(){
  if(capture[2].param_type!=PF_Param_SLIDER||
     capture[2].u.sd.dephault!=64)return 20;
  if(capture[26].param_type!=PF_Param_FLOAT_SLIDER||
-    std::fabs(capture[26].u.fs_d.dephault-.0008)>1e-5)return 21;
+    std::fabs(capture[26].u.fs_d.dephault-.003)>1e-5)return 21;
  if(capture[10].param_type!=PF_Param_POPUP ||
     capture[10].u.pd.num_choices!=8 || capture[10].u.pd.dephault!=1)return 16;
  if(capture[55].param_type!=PF_Param_CHECKBOX||
     capture[55].u.bd.dephault!=FALSE)return 22;
  if(capture[56].param_type!=PF_Param_CHECKBOX||
-    capture[56].u.bd.dephault!=TRUE)return 23;
+    capture[56].u.bd.dephault!=FALSE)return 23;
  if(capture[2].u.sd.valid_max!=2048)return 24;
+ // Pristine Nuke constructor defaults for unconfigured newly added effects.
+ if(capture[27].u.sd.dephault!=3||capture[36].u.sd.dephault!=16||
+    capture[37].u.sd.dephault!=100)return 47;
  if(capture[16].param_type!=PF_Param_POPUP ||
     capture[16].u.pd.num_choices!=4 ||
-    capture[16].u.pd.dephault!=4)return 43;
+    capture[16].u.pd.dephault!=1)return 43;
  if(capture[6].u.sd.dephault!=512||capture[6].u.sd.valid_max<512)return 25;
  if(capture[57].param_type!=PF_Param_FLOAT_SLIDER||
     std::fabs(capture[57].u.fs_d.dephault-96.)>1e-5)return 26;

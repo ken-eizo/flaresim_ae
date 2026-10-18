@@ -555,6 +555,19 @@ int main(){
  PF_OutData out{};
  if(effect(PF_Cmd_PARAMS_SETUP,&in,&out,nullptr,nullptr,nullptr)!=PF_Err_NONE||
     g_params.size()!=64||out.num_params!=65)return 4;
+ // Newly created AE effects must use the original Nuke sampling,
+ // Ghost Blur and preview-quality defaults. Old serialized AE parameter
+ // values stay unchanged: no parameter ID is inserted or reordered.
+ if(g_params[16].u.pd.value!=1||
+    std::abs(g_params[26].u.fs_d.value-.003)>1e-6||
+    g_params[27].u.sd.value!=3||
+    g_params[36].u.sd.value!=16||
+    g_params[37].u.sd.value!=100||
+    g_params[56].u.bd.value!=FALSE){
+  std::cerr<<"AE_NEW_INSTANCE_DEFAULTS_DIVERGE_FROM_ORIGINAL_NUKE\n";
+  return 5;
+ }
+ std::cout<<"NUKE_SHIPPING_DEFAULTS_PARITY_PASSED\n";
  g_params[55].u.bd.value=TRUE; // exercise optional real-host telemetry
  std::cout<<"SHIPPING_PARAMETER_DEFAULTS point=("<<FIX_2_FLOAT(g_params[0].u.td.x_value)
           <<","<<FIX_2_FLOAT(g_params[0].u.td.y_value)<<") radiance="
