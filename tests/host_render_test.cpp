@@ -128,7 +128,7 @@ static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
           <<" visible_rgba="<<visible<<" alpha_nonzero="<<nonempty_alpha
           <<" rgb_with_alpha_zero="<<orphan_rgb
           <<" peak_alpha="<<max_alpha<<" energy="<<energy<<"\n";
- if(visible<(snapshot?1:32)||orphan_rgb!=0||nonempty_alpha<visible||energy<=0)return 3;
+ if(visible<(mode==3||snapshot?1:32)||orphan_rgb!=0||nonempty_alpha<visible||energy<=0)return 3;
  return 0;
 }
 

@@ -123,6 +123,8 @@ jobs:
             grep -q 'METAL_NUKE_HAZE_FINAL_REMAINDER_BLOCK_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_NUKE_RAW_PRECLUSTER_HAZE_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_NUKE_FLARE_RGB_EXCLUDES_HAZE_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_NUKE_SOURCE_RGB_PREVIEW_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
+            grep -q 'METAL_NUKE_SOURCE_RGB_OVERLAP_ORDER_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_TRANSPARENT_COMPOSITE_NOT_BLACK_PASSED' "$RUNNER_TEMP/metal-test.log"
             grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/metal-test.log"
           fi
@@ -170,6 +172,8 @@ jobs:
             grep -q 'METAL_NUKE_HAZE_FINAL_REMAINDER_BLOCK_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_NUKE_RAW_PRECLUSTER_HAZE_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_NUKE_FLARE_RGB_EXCLUDES_HAZE_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
+            grep -q 'METAL_NUKE_SOURCE_RGB_PREVIEW_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
+            grep -q 'METAL_NUKE_SOURCE_RGB_OVERLAP_ORDER_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
             grep -q 'METAL_4_THREAD_12_FRAME_MFR_PARITY_PASSED' "$RUNNER_TEMP/shipped-metal-test.log"
           fi
       - uses: actions/upload-artifact@v4

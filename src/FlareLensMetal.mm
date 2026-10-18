@@ -32,6 +32,7 @@ struct Trace {
  float sensor_z,front_radius,start_z,half_w,half_h,gain,ray_weight;
 };
 struct MetalImageParams {uint32_t w,h,src_pitch,dst_pitch,mode;float gain;};
+struct MetalPreviewParams {uint32_t w,h,pitch,count,step;};
 struct PixelFloat4 {float x,y,z,w;};
 struct Blur {uint32_t w,h,radius;};
 struct Haze {uint32_t w,h,pitch,count;float gain;};
@@ -162,10 +163,11 @@ size_t metal_scratch_bytes(const LensSystem& lens,int count,int grid,int w,int h
     mode<1||mode>5)return 0;
  const size_t bytes=size_t(w)*size_t(h)*16;
  if(bytes>size_t(1024)*1024*1024)return 0;
- // Preview and analytic Haze Only never touch full-frame scratch.
- // Retain a tiny nonzero allocation: the AE adapter treats zero as a
- // failure/unsupported request when an optical source exists.
- if(mode==3||(mode==5&&!dense_haze))return 16;
+ // Nuke source.rgb needs a per-pixel winner index to guarantee
+ // sequential overwrite semantics even for overlapping source blocks.
+ // Analytic Haze Only still needs only a tiny nonzero allocation.
+ if(mode==3)return bytes/4;
+ if(mode==5&&!dense_haze)return 16;
  // Ray accumulation needs ONE image; blur needs a ping-pong second image.
  // Dense haze uses two in its existing clearing/blur implementation.
  return bytes*((ghost_blur||dense_haze)?2:1);
@@ -281,7 +283,7 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
     v.width<1||v.height<1||v.width>16384||v.height>16384||
     v.output_pitch_bytes<v.width*16||v.output_pitch_bytes%16||
     (src&&(v.input_pitch_bytes<v.width*16||v.input_pitch_bytes%16))||
-    ((v.output_mode==1||v.output_mode==3)&&!src)||
+    (v.output_mode==1&&!src)||
     v.output_mode<1||v.output_mode>5)return false;
  const int w=v.width,h=v.height;
  const size_t pixels=size_t(w)*h,bytes=pixels*16;
@@ -311,14 +313,24 @@ bool metal_compose(const LensSystem& lens,const std::vector<Source>& sources,
              uint32_t(v.output_pitch_bytes/16),uint32_t(v.output_mode),1.f};
  id<MTLCommandBuffer> cmd=[queue commandBuffer];
  if(v.output_mode==3){
-  if(!src)return false;
-  if(!encode(cmd,dev,@"fl_preview_base",pixels,{src,dst},
-     &image,sizeof(image),2))return false;
-  if(!lights.empty()){
-   image.mode=uint32_t(lights.size());
-   if(!encode(cmd,dev,@"fl_preview_mark",lights.size()*121,
-      {src,dst,light_gpu},&image,sizeof(image),3))return false;
+  // RGB source blocks are a zero-background diagnostic, independent of
+  // the input image. Nuke writes source.rgb in source iteration order.
+  if(lights.empty()){
+   return encode(cmd,dev,@"fl_plate_empty",pixels,{src,dst},
+       &image,sizeof(image),2)&&finish(cmd);
   }
+  if(!temp||scratch_size<pixels*4||temp.length<pixels*4)return false;
+  id<MTLBlitCommandEncoder> blit=[cmd blitCommandEncoder];
+  [blit fillBuffer:temp range:NSMakeRange(0,pixels*4) value:0];
+  [blit endEncoding];
+  const MetalPreviewParams info{uint32_t(w),uint32_t(h),
+    uint32_t(v.output_pitch_bytes/16),uint32_t(lights.size()),
+    uint32_t(std::clamp(v.preview_step,1,32))};
+  if(!encode(cmd,dev,@"fl_preview_winners",
+     lights.size()*size_t(info.step)*info.step,{light_gpu,temp},
+     &info,sizeof(info),2))return false;
+  if(!encode(cmd,dev,@"fl_preview_resolve",pixels,
+     {light_gpu,temp,dst},&info,sizeof(info),3))return false;
   return finish(cmd);
  }
  // Modes other than Composite are input-independent and must not read or

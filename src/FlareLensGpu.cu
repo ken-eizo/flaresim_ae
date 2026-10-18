@@ -516,36 +516,31 @@ __global__ void flarelens_spectral_kernel(
   }
  }
 }
-// Source Preview needs no optical trace: dim RGB in one GPU pass and
-// atomically paint up to 121 pixels per detected source. Its per-source
-// cost is constant, independent of the Ray Grid and ghost pair count.
-__global__ void flarelens_sources_preview_base(
- const float4* input,int input_pitch,float4* output,int output_pitch,
- int width,int height){
- const int i=int(blockIdx.x)*256+int(threadIdx.x);
- if(i>=width*height)return;
- const int x=i%width,y=i/width;
- const float4 in=input?input[size_t(y)*input_pitch+x]:make_float4(0,0,0,0);
- output[size_t(y)*output_pitch+x]=
-   make_float4(in.x*.12f,in.y*.12f,in.z*.12f,1.f);
+// Nuke source.rgb: exact NxN RGB blocks, overwriting on overlap in
+// source iteration order. The winner-index pass makes writes deterministic,
+// unlike racing HDR splats, and costs O(pixels + sources*step^2).
+__global__ void flarelens_preview_winners(
+ unsigned* winner,const GPUSource* lights,int w,int h,int step,int count){
+ const int s=int(blockIdx.x);
+ if(s>=count)return;
+ const GPUSource light=lights[s];
+ const int x0=int(light.angle_x*w)-step/2;
+ const int y0=int(light.angle_y*h)-step/2;
+ for(int t=int(threadIdx.x);t<step*step;t+=int(blockDim.x)){
+  const int x=x0+t%step,y=y0+t/step;
+  if(x>=0&&y>=0&&x<w&&y<h)
+   atomicMax(winner+size_t(y)*w+x,unsigned(s+1));
+ }
 }
-__global__ void flarelens_sources_preview_mark(
- const float4* input,int input_pitch,float4* output,int output_pitch,
- int width,int height,const int2* markers,int count){
- const int s=int(blockIdx.x),t=int(threadIdx.x);
- if(s>=count||t>=121)return;
- const int dx=t%11-5,dy=t/11-5;
- const int r2=dx*dx+dy*dy;
- if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
-      (dy==0&&r2<=25)))return;
- const int x=markers[s].x+dx,y=markers[s].y+dy;
- if(x<0||y<0||x>=width||y>=height)return;
- const float4 in=input?input[size_t(y)*input_pitch+x]:make_float4(0,0,0,0);
- float4* dst=output+size_t(y)*output_pitch+x;
- // Duplicate marks write the exact same value, safely via atomics.
- atomicExch(&dst->x,in.x*.12f+1.f);
- atomicExch(&dst->y,in.y*.12f+1.f);
- atomicExch(&dst->z,in.z*.12f+1.f);
+__global__ void flarelens_preview_resolve(
+ const unsigned* winner,const GPUSource* lights,float4* output,
+ int pitch,int w,int h){
+ const int i=int(blockIdx.x)*256+int(threadIdx.x);
+ if(i>=w*h)return;
+ const int x=i%w,y=i/w;
+ const unsigned s=winner[i];
+ const auto c=s?lights[s-1]:GPUSource{};
+ output[size_t(y)*pitch+x]=make_float4(c.b,c.g,c.r,1.f);
 }
 // Two full-resolution scratch surfaces hold only RGB photon energy (BGRA128).
 // The optical ray kernel above is unchanged. All post-processing remains on
@@ -762,7 +757,8 @@ size_t scratch_bytes(const LensSystem& lens,int sources,int grid,int w,int h,
     w>16384||h>16384||lens.surfaces.size()<2||lens.surfaces.size()>64||
     (output_mode!=1&&output_mode!=2&&output_mode!=3&&
      output_mode!=4&&output_mode!=5))return 0;
- if(output_mode==3)return align16(size_t(sources)*sizeof(int2));
+ if(output_mode==3)return align16(size_t(w)*h*sizeof(unsigned))+
+                           align16(size_t(sources)*sizeof(GPUSource));
  const size_t pairs=std::min<size_t>(2048,lens.surfaces.size()*lens.surfaces.size());
  const size_t npx=size_t(w)*size_t(h);
  if(npx>size_t(16384)*16384)return 0;
@@ -805,29 +801,35 @@ bool cuda_compose(const LensSystem& lens,const std::vector<Source>& sources,
  // vectors are destroyed or AE device scratch is released.
  SyncOnExit sync{stream,true};
  if(v.output_mode==3){
+  const int step=std::clamp(v.preview_step,1,32);
   const dim3 block(256),grid((unsigned(npx)+255)/256);
-  flarelens_sources_preview_base<<<grid,block,0,stream>>>(
-   static_cast<const float4*>(v.input),v.input_pitch_bytes/16,
-   static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h);
-  if(cudaPeekAtLastError()!=cudaSuccess)return false;
-  sync.pending=true;
-  if(!sources.empty()){
-   if(!scratch||scratch_size<align16(sources.size()*sizeof(int2)))
-    return false;
-   std::vector<int2> marker_positions;
-   marker_positions.reserve(sources.size());
-   for(const auto& source:sources)
-    marker_positions.push_back(make_int2(
-       int(floorf(source.x*w)),int(floorf(source.y*h))));
-   if(cudaMemcpyAsync(scratch,marker_positions.data(),
-      marker_positions.size()*sizeof(int2),cudaMemcpyHostToDevice,stream)
-      !=cudaSuccess)return false;
-   flarelens_sources_preview_mark<<<unsigned(sources.size()),128,0,stream>>>(
-     static_cast<const float4*>(v.input),v.input_pitch_bytes/16,
-     static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h,
-     static_cast<const int2*>(scratch),int(sources.size()));
-   if(cudaPeekAtLastError()!=cudaSuccess)return false;
+  if(sources.empty()){
+   flarelens_init_plate<<<grid,block,0,stream>>>(
+      static_cast<float4*>(v.output),v.output_pitch_bytes/16,w,h,3);
+   return cudaPeekAtLastError()==cudaSuccess&&sync.finish();
   }
+  const size_t winners_bytes=align16(npx*sizeof(unsigned));
+  const size_t required=winners_bytes+
+     align16(sources.size()*sizeof(GPUSource));
+  if(!scratch||scratch_size<required)return false;
+  auto* winner=static_cast<unsigned*>(scratch);
+  auto* device_lights=reinterpret_cast<GPUSource*>(
+     static_cast<unsigned char*>(scratch)+winners_bytes);
+  std::vector<GPUSource> preview_lights;
+  preview_lights.reserve(sources.size());
+  for(const auto& s:sources)
+   preview_lights.push_back({s.x,s.y,s.r,s.g,s.b,0,0,0});
+  if(cudaMemsetAsync(winner,0,npx*sizeof(unsigned),stream)!=cudaSuccess||
+     cudaMemcpyAsync(device_lights,preview_lights.data(),
+      preview_lights.size()*sizeof(GPUSource),cudaMemcpyHostToDevice,stream)
+      !=cudaSuccess)return false;
+  flarelens_preview_winners<<<unsigned(sources.size()),256,0,stream>>>(
+     winner,device_lights,w,h,step,int(sources.size()));
+  if(cudaPeekAtLastError()!=cudaSuccess)return false;
+  flarelens_preview_resolve<<<grid,block,0,stream>>>(
+     winner,device_lights,static_cast<float4*>(v.output),
+     v.output_pitch_bytes/16,w,h);
+  if(cudaPeekAtLastError()!=cudaSuccess)return false;
   return sync.finish();
  }
  if(v.output_mode==1){

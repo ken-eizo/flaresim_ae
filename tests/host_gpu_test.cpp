@@ -16,6 +16,7 @@
 #include "FlareLensCore.hpp"
 #include "FlareLensCatalogGenerated.hpp"
 #include "FlareLensOptics.hpp"
+#include "FlareLensNukePreview.hpp"
 #include "FlareLensCustom.hpp"
 #include "FlareLensComposite.hpp"
 #include <cuda_runtime.h>
@@ -258,25 +259,10 @@ static int one_render(Main effect,PF_InData& in,int mode,
   }
  }
  if(mode==3){
-  // CPU Sources Preview uses the input RGB at 12% and an opaque cross.
-  // Check both manually placed emitters and HDR GPU auto detection.
-  if(detect){
-   for(size_t i=0;i<n;i++){
-    expected[i*3]=image_cpu[i].z*.12f;
-    expected[i*3+1]=image_cpu[i].y*.12f;
-    expected[i*3+2]=image_cpu[i].x*.12f;
-   }
-  }
-  const int cx=detect?block_x+2:int(std::floor(sx*width));
-  const int cy=detect?block_y+2:int(std::floor(sy*height));
-  for(int dy=-5;dy<=5;dy++)for(int dx=-5;dx<=5;dx++){
-   const int x=cx+dx,y=cy+dy,r2=dx*dx+dy*dy;
-   if(x<0||x>=width||y<0||y>=height)continue;
-   if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
-        (dy==0&&r2<=25)))continue;
-   const auto i=(size_t(y)*width+x)*3;
-   expected[i]+=1.f;expected[i+1]+=1.f;expected[i+2]+=1.f;
-  }
+  // Upstream Nuke source.rgb: opaque-black RGB field with full HDR source
+  // blocks AFTER clustering/cap, not AE-only dimmed footage + crosshairs.
+  expected=fl::nuke_preview_rgb(lights,width,height,
+             adaptive?8:4);
  }
  if((mode==1||mode==5)&&many==0){
   std::vector<float> haze;
@@ -320,7 +306,7 @@ static int one_render(Main effect,PF_InData& in,int mode,
           <<" visible_rgba="<<visible<<" alpha_errors="<<alpha_errors
           <<" gpu_allocations="<<allocations<<" gpu_frees="<<free_calls
           <<" max_scratch_MB="<<double(max_allocation)/1048576<<"\n";
- if(visible<32||alpha_errors||rel>.02||
+ if(visible<(mode==3?1u:32u)||alpha_errors||rel>.02||
     (many>0&&elapsed>5000.))return 29;
  // Production AEX must request the tight scratch size, not the old
  // conservative 2-frame allocation used by standalone compatibility API.

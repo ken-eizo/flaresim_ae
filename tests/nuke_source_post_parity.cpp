@@ -1,6 +1,7 @@
 // Independent original-FlareSim Nuke algorithm oracle for CPU/Mac source
 // grouping, pre-cap haze, box blur and Fraunhofer starburst stages.
 #include "FlareLensNukeSources.hpp"
+#include "FlareLensNukePreview.hpp"
 #include "FlareLensOptics.hpp"
 #include "starburst.h"
 #include <algorithm>
@@ -180,5 +181,48 @@ int main(){
  std::printf("NUKE_STARBURST_REL_L1=%g\n",star_diff/star_energy);
  if(star_energy<1||star_diff/star_energy>.0001)return 4;
  std::puts("NUKE_STARBURST_PSF_PARITY_PASSED");
+ // Reproduce pristine upstream source.rgb's independent angular inversion,
+ // scan-step footprint and sequential overpainting for overlapping sources.
+ // Source RGB remains HDR; original Nuke does not draw AE crosshairs or
+ // blend the image plate beneath this auxiliary channel.
+ {
+  constexpr int fw=127,fh=91;
+  const std::vector<fl::Source> chosen{
+   {14.5f/fw,16.5f/fh,2.2f,1.1f,9.5f},
+   {14.5f/fw,16.5f/fh,51.f,17.f,8.f}, // Later source overwrites previous
+   {125.5f/fw,89.5f/fh,9.f,8.f,7.f},
+   {-1.5f/fw,44.5f/fh,3.f,4.f,5.f},  // Off-frame light
+   {.5f,.5f,10000.f,3200.f,240.f}
+  };
+  const float a=std::tan(fovh*pi/360.f);
+  const float b=std::tan(fovv*pi/360.f);
+  for(int step:{1,3,4,5,8,13}){
+   std::vector<BrightPixel> angles;
+   for(const auto& s:chosen)
+    angles.push_back({std::atan((s.x-.5f)*2.f*a),
+                      std::atan((s.y-.5f)*2.f*b),
+                      s.r,s.g,s.b});
+   std::vector<float> oracle(size_t(fw)*fh*3,0);
+   for(const auto& src:angles){
+    const int cx=int(std::tan(src.angle_x)/(2.f*a)*fw+fw*.5f);
+    const int cy=int(std::tan(src.angle_y)/(2.f*b)*fh+fh*.5f);
+    for(int y=std::max(0,cy-step/2);y<std::min(fh,cy-step/2+step);y++)
+     for(int x=std::max(0,cx-step/2);x<std::min(fw,cx-step/2+step);x++){
+      const auto i=(size_t(y)*fw+x)*3;
+      oracle[i]=src.r;oracle[i+1]=src.g;oracle[i+2]=src.b;
+     }
+   }
+   const auto result=fl::nuke_preview_rgb(chosen,fw,fh,step);
+   if(result.size()!=oracle.size())return 7;
+   double max_error=0;
+   for(size_t i=0;i<result.size();i++)
+    max_error=std::max(max_error,std::abs(double(result[i])-oracle[i]));
+   if(max_error>1e-4){
+    std::fprintf(stderr,"Nuke source.rgb mismatch step=%d err=%g\n",
+                 step,max_error);return 8;
+   }
+  }
+  std::puts("NUKE_SOURCE_RGB_PREVIEW_BLOCK_PARITY_PASSED");
+ }
  return 0;
 }

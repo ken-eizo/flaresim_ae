@@ -34,6 +34,7 @@
 #include "FlareLensComposite.hpp"
 #include "FlareLensSourceModel.hpp"
 #include "FlareLensNukeSources.hpp"
+#include "FlareLensNukePreview.hpp"
 #include "FlareLensHostGeometry.hpp"
 #include "FlareLensHostTrace.hpp"
 #include "FlareLensOptics.hpp"
@@ -633,22 +634,11 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   for(const float v:ghost.rgb)
    if(std::isfinite(v))optical_diagnostic_peak=std::max(optical_diagnostic_peak,v);
  }
- std::vector<uint8_t> source_marks;
- if(mode==3){
-  source_marks.resize(size_t(w)*h);
-  for(const auto& src:sources){
-   const int sx=int(std::floor(src.x*frame_w))-geometry.output_x;
-   const int sy=int(std::floor(src.y*frame_h))-geometry.output_y;
-   if(sx < -6 || sx>=w+6 || sy < -6 || sy>=h+6)continue;
-   for(int dy=-5;dy<=5;dy++)for(int dx=-5;dx<=5;dx++){
-    const int xx=sx+dx,yy=sy+dy;
-    if(xx<0||xx>=w||yy<0||yy>=h)continue;
-    const int r2=dx*dx+dy*dy;
-    if((r2>=9&&r2<=25)||(dx==0&&r2<=25)||(dy==0&&r2<=25))
-     source_marks[size_t(yy)*w+xx]=1;
-   }
-  }
- }
+ const int preview_stride=std::clamp(args.preview?args.preview_step:
+   args.scan_step,1,32);
+ const auto source_preview=mode==3?
+   fl::nuke_preview_rgb(sources,frame_w,frame_h,preview_stride):
+   std::vector<float>{};
  for(int y=0;y<h;y++){
   if((y&31)==0){const PF_Err cancelled=PF_ABORT(in);if(cancelled)return cancelled;}
   for(int x=0;x<w;x++){
@@ -686,11 +676,13 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
      if(x%std::max(1,w/8)<2)color={1,1,1,1};
     }
    }else if(mode==3){
-    const float mark=source_marks[size_t(y)*w+x]?1.f:0.f;
-    color.r=color.r*.12f+mark;
-    color.g=color.g*.12f+mark;
-    color.b=color.b*.12f+mark;
-    color.a=1.f;
+    color={0,0,0,1};
+    if(fx>=0&&fy>=0&&fx<frame_w&&fy<frame_h){
+     const size_t i=(size_t(fy)*frame_w+fx)*3;
+     color.r=source_preview[i];
+     color.g=source_preview[i+1];
+     color.b=source_preview[i+2];
+    }
    }else{
     if(mode!=1){color.r=0;color.g=0;color.b=0;color.a=1.f;}
     if(mode==7 && ghost.diagnostics.screen_samples==0){
@@ -1098,6 +1090,11 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     view.haze_radius=args.haze_radius;
     view.haze_passes=args.haze_passes;
     view.haze_footprint=haze_footprint;
+    view.preview_step=std::clamp(
+      args.preview||(args.adaptive_preview&&
+      ((in->downsample_x.num>0&&in->downsample_x.num<in->downsample_x.den)||
+       (in->downsample_y.num>0&&in->downsample_y.num<in->downsample_y.den)))?
+      args.preview_step:args.scan_step,1,32);
    view.haze_sources=&raw_sources;
     view.command_stream=device_info.command_queuePV;
     view.check_abort=[](void* context)->int{

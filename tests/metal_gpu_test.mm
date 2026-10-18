@@ -5,6 +5,7 @@
 #include "FlareLensSourceModel.hpp"
 #include "FlareLensOptics.hpp"
 #include "FlareLensNukeSources.hpp"
+#include "FlareLensNukePreview.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -118,8 +119,35 @@ int main(){
   const auto* preview=static_cast<const float*>(out.contents);
   const int cx=int(sources[0].x*w),cy=int(sources[0].y*h);
   const size_t marker=(size_t(cy)*w+cx)*4;
-  if(preview[marker]<1.f||preview[marker+1]<1.f||
-     preview[marker+2]<1.f)return 41;
+  if(std::abs(preview[marker]-.6f)>1e-6f||
+     std::abs(preview[marker+1]-.8f)>1e-6f||
+     std::abs(preview[marker+2]-1.8f)>1e-6f)return 41;
+  const auto expected_preview=fl::nuke_preview_rgb(sources,w,h,view.preview_step);
+  for(size_t i=0;i<n;i++)for(int c=0;c<3;c++)
+    if(std::abs(preview[4*i+2-c]-expected_preview[3*i+c])>1e-6f)
+     return 116;
+  std::cout<<"METAL_NUKE_SOURCE_RGB_PREVIEW_PARITY_PASSED\n";
+  // Shared block winner buffer must reproduce Nuke's sequential RGB
+  // overwrites for overlapping and partially offscreen HDR sources.
+  {
+   const std::vector<fl::Source> overlaps{
+     {.50f,.50f,6.f,4.f,2.f},
+     {.50f+1.f/w,.50f+1.f/h,50.f,27.f,9.f},
+     {-2.f/w,35.f/h,10.f,7.f,5.f},
+     {.97f,.98f,700.f,200.f,100.f}};
+   view.preview_step=5;
+   if(!fl::gpu::metal_compose(lens,overlaps,cfg,view,
+        (__bridge void*)scratch,scratch_bytes))return 118;
+   const auto target=fl::nuke_preview_rgb(overlaps,w,h,5);
+   const auto* actual=static_cast<const float*>(out.contents);
+   for(size_t i=0;i<n;i++){
+    for(int c=0;c<3;c++)
+     if(std::abs(double(actual[4*i+2-c])-target[3*i+c])>1e-6)return 119;
+    if(std::abs(actual[4*i+3]-1.f)>1e-6)return 120;
+   }
+   view.preview_step=4;
+   std::cout<<"METAL_NUKE_SOURCE_RGB_OVERLAP_ORDER_PASSED\n";
+  }
   view.output_mode=5;
   view.haze_gain=8.f;
   view.haze_radius=.1f;
@@ -351,8 +379,14 @@ int main(){
     }
   }
   view.output_mode=3;
-  if(fl::gpu::metal_compose(lens,sources,cfg,view,
+  // Nuke source.rgb is input-independent; null AE source worlds must render
+  // the same HDR block map without ever dereferencing buffer(0).
+  if(!fl::gpu::metal_compose(lens,sources,cfg,view,
         (__bridge void*)scratch,scratch_bytes))return 79;
+  const auto* null_preview=static_cast<const float*>(out.contents);
+  const auto expected_null=fl::nuke_preview_rgb(sources,w,h,view.preview_step);
+  for(size_t i=0;i<n;i++)for(int c=0;c<3;c++)
+   if(std::abs(null_preview[i*4+2-c]-expected_null[i*3+c])>1e-6f)return 117;
   view.input=(__bridge void*)in;
   std::cout<<"METAL_BLANK_INPUT_SOURCE_WORLD_PASSED\n";
   // Exact GPU scratch requirements: preserve output while removing one

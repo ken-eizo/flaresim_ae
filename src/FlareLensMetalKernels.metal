@@ -92,42 +92,37 @@ kernel void fl_plate_empty(
  const uint x=tid%a.width,y=tid/a.width;
  output[y*a.output_pitch+x]=float4(0,0,0,1);
 }
-// Source preview is O(pixels + sources*121), NOT O(pixels*sources).
-kernel void fl_preview_base(
- device const float4* input [[buffer(0)]],
- device float4* output [[buffer(1)]],
- constant FlImage& a [[buffer(2)]],
+// Exact original Nuke source.rgb: block overwrite, never crosshair.
+// Max-index atomics reproduce deterministic serial source iteration order.
+struct FlPreview {uint w,h,pitch,count,step;};
+kernel void fl_preview_winners(
+ device const FlSource* sources [[buffer(0)]],
+ device atomic_uint* winners [[buffer(1)]],
+ constant FlPreview& a [[buffer(2)]],
  uint tid [[thread_position_in_grid]]){
- if(tid>=a.width*a.height)return;
- const uint x=tid%a.width,y=tid/a.width;
- float4 v=input[y*a.input_pitch+x]*.12f;
- v.w=1.f;
- output[y*a.output_pitch+x]=v;
+ if(!a.step||tid>=a.count*a.step*a.step)return;
+ const uint i=tid/(a.step*a.step);
+ const uint q=tid%(a.step*a.step);
+ const FlSource light=sources[i];
+ const int x=int(light.angle_x*float(a.w))-int(a.step/2)+int(q%a.step);
+ const int y=int(light.angle_y*float(a.h))-int(a.step/2)+int(q/a.step);
+ if(x>=0&&y>=0&&x<int(a.w)&&y<int(a.h))
+  atomic_fetch_max_explicit(winners+uint(y)*a.w+uint(x),
+                            i+1,memory_order_relaxed);
 }
-kernel void fl_preview_mark(
- device const float4* input [[buffer(0)]],
- device atomic_uint* output [[buffer(1)]],
- device const FlSource* sources [[buffer(2)]],
- constant FlImage& a [[buffer(3)]],
+kernel void fl_preview_resolve(
+ device const FlSource* sources [[buffer(0)]],
+ device const uint* winners [[buffer(1)]],
+ device float4* output [[buffer(2)]],
+ constant FlPreview& a [[buffer(3)]],
  uint tid [[thread_position_in_grid]]){
- if(tid>=a.mode*121u)return;
- const uint index=tid/121u,p=tid%121u;
- const int dx=int(p%11u)-5,dy=int(p/11u)-5;
- const int r2=dx*dx+dy*dy;
- if(!((r2>=9&&r2<=25)||(dx==0&&r2<=25)||
-      (dy==0&&r2<=25)))return;
- const int x=int(floor(sources[index].angle_x*a.width))+dx;
- const int y=int(floor(sources[index].angle_y*a.height))+dy;
- if(x<0||y<0||x>=int(a.width)||y>=int(a.height))return;
- const uint src_pos=uint(y)*a.input_pitch+uint(x);
- const uint dst_pos=(uint(y)*a.output_pitch+uint(x))*4;
- const float4 in=input[src_pos];
- atomic_store_explicit(output+dst_pos,
-   as_type<uint>(in.x*.12f+1.f),memory_order_relaxed);
- atomic_store_explicit(output+dst_pos+1,
-   as_type<uint>(in.y*.12f+1.f),memory_order_relaxed);
- atomic_store_explicit(output+dst_pos+2,
-   as_type<uint>(in.z*.12f+1.f),memory_order_relaxed);
+ if(tid>=a.w*a.h)return;
+ const uint index=winners[tid];
+ const float3 rgb=index?
+   float3(sources[index-1].r,sources[index-1].g,sources[index-1].b):
+   float3(0);
+ const uint x=tid%a.w,y=tid/a.w;
+ output[y*a.pitch+x]=float4(rgb.z,rgb.y,rgb.x,1);
 }
 kernel void fl_add(
  device const float4* photon [[buffer(0)]],

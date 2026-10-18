@@ -126,6 +126,14 @@ Tests:
   angular clustering with `Max Sources=4`, maximum per-source numeric error 0.
 - `FlareLensGpuPostTest`: source list capped at one for ghosts while Haze
   uses 48 original raw sources; CUDA Haze RGB result matches CPU reference.
+- `FlareLensNukeSourcePostParity`: independently checks original Nuke
+  `source.rgb` block overwrite across strides 1/3/4/5/8/13, HDR values,
+  overlapping blocks, off-frame emitters and odd image dimensions.
+- `FlareLensGpuPostTest`: checks CUDA GPU `Sources Preview` against the shared
+  Nuke block oracle for strides 1/5/13 with overlapping sources and NULL
+  input plate; maximum absolute RGB error is zero.
+- `FlareLensMetalGpuTest`: tests exact source-preview blocks and overlap
+  ordering, including independently from AE's input world.
 - `FlareLensMetalGpuTest`: tests source detector pre-cluster metadata,
   Haze-only last remainder block, and distinct raw-Haze vs capped-Ghost
   input lists, plus independent pristine Nuke optical golden image.
@@ -143,8 +151,7 @@ The intended optical additions are **Golden Angle pupil sampling** and the
 other behavioral differences inherited from previous versions:
 `Match FHD Flare Brightness` (deliberately changes photon energy when ON),
 adaptive preview/downsample, an input-alpha detection gate (Nuke instead
-has a separate mask input), the crosshair-based `Sources Preview`
-(instead of Nuke's RGB source-block map), and AE-style Composite alpha
+has a separate mask input), and AE-style Composite alpha
 instead of arbitrary Nuke named channels. These cannot truthfully be called
 fully Nuke-identical yet. Preserve old project serialization and explicitly
 resolve these differences rather than deleting existing parameters.

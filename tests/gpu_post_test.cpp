@@ -3,6 +3,7 @@
 // GPU pixels stay on device until the final reference-check copy.
 #include "FlareLensGpuBridge.hpp"
 #include "FlareLensOptics.hpp"
+#include "FlareLensNukePreview.hpp"
 #include "FlareLensComposite.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -148,6 +149,45 @@ int main(){
            <<" alpha_mismatch="<<wrong_alpha<<" lit="<<lit
            <<" scratch_MB="<<double(size)/1048576<<"\n";
   if(relative>.02||wrong_alpha>pixels/1000||lit==0)return 9+int(test);
+ }
+ // Compare actual GPU source.rgb against Nuke's sequential block map.
+ // Overlap must overwrite deterministically, not atomically add or tint.
+ for(int step:{1,5,13}){
+  const int w=127,h=91;
+  const std::vector<fl::Source> lights{
+    {15.5f/w,20.5f/h,3.2f,2.f,1.f},
+    {16.5f/w,21.5f/h,90.f,23.f,7.f},
+    {125.5f/w,89.5f/h,8.f,4.f,3.f},
+    {-1.5f/w,36.5f/h,15.f,10.f,3.f},
+    {.5f,.5f,30000.f,12500.f,700.f}};
+  const auto expected=fl::nuke_preview_rgb(lights,w,h,step);
+  const size_t bytes=size_t(w)*h*16;
+  void* out=nullptr,*scratch=nullptr;
+  const size_t scratch_size=fl::gpu::scratch_bytes(
+    lens,int(lights.size()),12,w,h,3,false,false,false);
+  if(!scratch_size||cudaMalloc(&out,bytes)!=cudaSuccess||
+     cudaMalloc(&scratch,scratch_size)!=cudaSuccess)return 93;
+  fl::gpu::View v{};
+  v.output=out;v.width=w;v.height=h;v.output_pitch_bytes=w*16;
+  v.output_mode=3;v.preview_step=step;v.input=nullptr;
+  fl::Settings s{};s.grid=12;
+  if(!fl::gpu::cuda_compose(lens,lights,s,v,scratch,scratch_size))return 94;
+  std::vector<float> got(size_t(w)*h*4);
+  if(cudaMemcpy(got.data(),out,bytes,cudaMemcpyDeviceToHost)!=cudaSuccess)return 95;
+  cudaFree(scratch);cudaFree(out);
+  double max_error=0;
+  for(size_t i=0;i<size_t(w)*h;i++){
+   for(int c=0;c<3;c++)
+    max_error=std::max(max_error,std::abs(
+      double(got[4*i+2-c])-double(expected[3*i+c])));
+   max_error=std::max(max_error,std::abs(double(got[4*i+3])-1.));
+  }
+  if(max_error>1e-6){
+   std::cerr<<"CUDA Nuke source.rgb mismatch stride="<<step
+            <<" error="<<max_error<<"\n";return 96;
+  }
+  std::cout<<"CUDA_NUKE_SOURCE_RGB_PREVIEW_PARITY_PASSED stride="
+           <<step<<" max_abs_error="<<max_error<<"\n";
  }
  std::cout<<"AE_CUDA_FULL_OPTICAL_POSTPROCESS_PARITY_OK\n";
  return 0;
