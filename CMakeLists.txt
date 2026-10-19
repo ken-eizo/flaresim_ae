@@ -314,3 +314,12 @@ if(FLARELENS_BUILD_AE)
 endif()
 # End Windows-only AE integration; macOS uses cmake/MacOS.cmake.
 endif()
+# Visual Studio: group test and benchmark projects under a "Tests" solution
+# folder so FlareLensAE and FlareLensCore stay at the top of Solution Explorer.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+get_property(FLARE_ALL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(FLARE_TARGET IN LISTS FLARE_ALL_TARGETS)
+ if(FLARE_TARGET MATCHES "(Test|Parity|Reference|Benchmark)$")
+  set_target_properties(${FLARE_TARGET} PROPERTIES FOLDER "Tests")
+ endif()
+endforeach()
