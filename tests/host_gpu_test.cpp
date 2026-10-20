@@ -73,7 +73,7 @@ static PF_Err SPAPI gpu_world_data(PF_ProgPtr,PF_EffectWorld* world,void** ptr){
  if(!world||!ptr)return PF_Err_BAD_CALLBACK_PARAM;
  *ptr=world->data;return PF_Err_NONE;
 }
-static SPErr SPAPI acquire(const char* name,int32 version,const void** suite){
+static SPErr SPAPI acquire(const char* name,int version,const void** suite){
  if(!name||!suite)return 1;
  if(std::strcmp(name,kPFWorldSuite)==0&&version==kPFWorldSuiteVersion2){
   *suite=&world_suite;return 0;
@@ -84,7 +84,7 @@ static SPErr SPAPI acquire(const char* name,int32 version,const void** suite){
  }
  return 1;
 }
-static SPErr SPAPI release(const char*,int32){return 0;}
+static SPErr SPAPI release(const char*,int){return 0;}
 static PF_Err checkout_param(PF_ProgPtr,PF_ParamIndex index,A_long,A_long,
                               A_u_long,PF_ParamDef* value){
  if(!value||index<1||index>int(params.size()))return PF_Err_INVALID_INDEX;
@@ -163,8 +163,9 @@ static int one_render(Main effect,PF_InData& in,int mode,
  in.width=width*(adaptive?2:1);in.height=height*(adaptive?2:1);
  in.downsample_x.num=1;in.downsample_x.den=adaptive?2:1;
  in.downsample_y.num=1;in.downsample_y.den=adaptive?2:1;
- params[0].u.td.x_value=FLOAT2FIX(in.width*.72f);
- params[0].u.td.y_value=FLOAT2FIX(in.height*.25f);
+ // AE hands the point over in the rendered (Half: downsampled) world.
+ params[0].u.td.x_value=FLOAT2FIX(width*.72f);
+ params[0].u.td.y_value=FLOAT2FIX(height*.25f);
  params[2].u.sd.value=many>0?12:64; // 512 multi-source GPU integration
  params[5].u.bd.value=detect?TRUE:FALSE; // actual Nuke HDR detector
  params[8].u.pd.value=quick_preset; // original 12 AE preset indices
@@ -235,27 +236,32 @@ static int one_render(Main effect,PF_InData& in,int mode,
  cudaFree(device);
  if(input_device)cudaFree(input_device);
  gpu_input_world=nullptr;
+ // An adaptive (Half) preview keeps the Full frame's sampling: it is the
+ // Full frame (in.width x in.height) box-averaged.
  fl::Settings settings;
- settings.grid=adaptive||many>0?12:64;
- settings.spectral_samples=adaptive||many>0?3:7;
+ settings.grid=many>0?12:64;
+ settings.spectral_samples=many>0?3:7;
  settings.aperture_blades=6;
  settings.pupil_jitter=2;settings.gain=1000;settings.max_pairs=2048;
  // The native AE effect uses ALL active lens pairs, unlike the generic
  // Core Settings default max_pairs=40 used for tiny standalone tests.
  // Match the host's quantized 16.16 Point Control exactly.
- const float sx=FIX_2_FLOAT(params[0].u.td.x_value)/float(in.width);
- const float sy=FIX_2_FLOAT(params[0].u.td.y_value)/float(in.height);
+ const float sx=FIX_2_FLOAT(params[0].u.td.x_value)/float(width);
+ const float sy=FIX_2_FLOAT(params[0].u.td.y_value)/float(height);
  const std::vector<fl::Source> lights{detect?
   fl::Source{float(block_x+2)/width,float(block_y+2)/height,100,80,60}:
   fl::Source{sx,sy,30000,30000,30000}};
  std::vector<float> expected(n*3,0);
+ const int full_w=int(in.width),full_h=int(in.height);
  if(mode!=5&&mode!=3&&many==0){
-  expected=fl::render_cpu(lens,lights,settings,width,height).rgb;
-  if(expected.size()!=n*3)return 26;
+  expected=fl::render_cpu(lens,lights,settings,full_w,full_h).rgb;
+  if(expected.size()!=size_t(full_w)*full_h*3)return 26;
   if(mode!=2){
-   const int radius=int(std::round(.003f*std::hypot(float(width),float(height))));
-   fl::box_blur_rgb(expected,width,height,radius,3);
+   const int radius=int(std::round(.003f*std::hypot(float(full_w),float(full_h))));
+   fl::box_blur_rgb(expected,full_w,full_h,radius,3);
   }
+  if(adaptive)expected=fl::box_downscale_rgb(expected,full_w,full_h,2,2);
+  if(expected.size()!=n*3)return 26;
  }
  if(mode==3){
   // CPU Sources Preview uses the input RGB at 12% and an opaque cross.
@@ -280,7 +286,9 @@ static int one_render(Main effect,PF_InData& in,int mode,
  }
  if((mode==1||mode==5)&&many==0){
   std::vector<float> haze;
-  fl::render_haze(haze,lights,width,height,1.f,.15f,3,1);
+  // Haze stays on the preview raster: energy per full-resolution pixel and
+  // the Full blur's variance.
+  fl::render_haze(haze,lights,width,height,adaptive?.25f:1.f,.15f,3,1,adaptive?.5f:1.f);
   if(haze.size()!=n*3)return 27;
   for(size_t i=0;i<expected.size();i++)expected[i]+=haze[i];
  }

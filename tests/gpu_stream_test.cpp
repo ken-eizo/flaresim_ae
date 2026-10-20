@@ -4,6 +4,7 @@
 #include "FlareLensGpuBridge.hpp"
 #include "FlareLensOptics.hpp"
 #include "FlareLensComposite.hpp"
+#include "FlareLensMesh.hpp"
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cmath>
@@ -22,11 +23,15 @@ int main(){
  const auto filename=std::filesystem::path(__FILE__).parent_path().parent_path()/
   "upstream/lenses/lens_files/AI_Nikkor_50mm_F1.2S.lens";
  if(!lens.load(filename.string().c_str()))return 1;
- // Exact scratch allocator contract for quality levels beyond 512.
+ // Scratch allocator contract for high quality levels. Per-photon tracing
+ // stores every pupil sample (grows with grid^2); the interpolated pupil
+ // mesh used above fl::mesh::kCells needs a fixed-size buffer instead.
  const size_t mem512=fl::gpu::scratch_bytes(lens,1,512,320,180,2,false);
  const size_t mem1024=fl::gpu::scratch_bytes(lens,1,1024,320,180,2,false);
  const size_t mem2048=fl::gpu::scratch_bytes(lens,1,2048,320,180,2,false);
- if(!(mem512>0&&mem1024>mem512&&mem2048>mem1024)||
+ const bool grows=mem1024>mem512&&mem2048>mem1024;
+ const bool fixed=mem1024==mem512&&mem2048==mem512;
+ if(!(mem512>0&&(fl::mesh::uses_mesh(512)?fixed:grows))||
     fl::gpu::scratch_bytes(lens,1,2049,320,180,2,false)!=0)return 19;
  // Ghost-only render must not reserve 1D haze profiles for 512 sources.
  const auto old_scratch=fl::gpu::scratch_bytes(lens,512,64,1920,1080,4,false,false,true);

@@ -34,7 +34,16 @@ inline PF_Err register_ui(PF_ProgPtr,PF_CustomUIInfo* info){
    PF_Err_NONE:PF_Err_BAD_CALLBACK_PARAM;
 }
 inline PF_UtilCallbacks callbacks{};
+inline A_char* ansi_strcpy(A_char* dst,const A_char* src){return std::strcpy(dst,src);}
+// Older After Effects SDKs implement PF_STRCPY through utils->ansi.strcpy;
+// newer ones do not have that member at all.
+template<class T>
+auto set_ansi(T& cb,int)->decltype(cb.ansi.strcpy=&ansi_strcpy,void()){
+ cb.ansi.strcpy=&ansi_strcpy;
+}
+template<class T> void set_ansi(T&,long){}
 inline void configure(PF_InData& in){
+ set_ansi(callbacks,0);
  callbacks.host_new_handle=&new_handle;
  callbacks.host_lock_handle=&lock;
  callbacks.host_unlock_handle=&unlock;

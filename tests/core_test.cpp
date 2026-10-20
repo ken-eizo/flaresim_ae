@@ -1,8 +1,10 @@
 #include "FlareLensCore.hpp"
 #include "FlareLensSourceModel.hpp"
+#include "ghost.h"
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 int main(){
@@ -97,6 +99,27 @@ int main(){
  const auto first=fl::cached_pairs(lens,12.f,8.f);
  const auto second=fl::cached_pairs(lens,12.f,8.f);
  if(!first||first!=second)return 10;
+ // The cached two-stage selection must equal upstream filter_ghost_pairs()
+ // exactly, for every sensor size (the traced stage is shared between them).
+ for(const char* name:{"AI_Nikkor_50mm_F1.2S.lens","100mm_F10_(Ross_F10_APO_Process_Xpres).lens",
+   "Nikon_180-400mm_F4_IF_OS_(AF-S_Nikkor_180-400mm_F4E_TC1.4_FL_ED_VR_with_TC).lens"}){
+  LensSystem candidate;
+  const auto p=std::filesystem::path(__FILE__).parent_path().parent_path()/
+     "upstream/lenses/lens_files"/name;
+  if(!candidate.load(p.string().c_str()))return 11;
+  for(const float sw:{2.f,12.f,40.f}){
+   const float sh=sw*9.f/16.f;
+   std::vector<GhostPair> pairs;
+   std::vector<float> boosts;
+   filter_ghost_pairs(candidate,sw,sh,GhostConfig{},pairs,boosts);
+   const auto cached=fl::cached_pairs(candidate,sw,sh);
+   if(cached->pairs.size()!=pairs.size()||cached->boosts.size()!=boosts.size())return 12;
+   for(size_t k=0;k<pairs.size();k++){
+    if(cached->pairs[k].surf_a!=pairs[k].surf_a||cached->pairs[k].surf_b!=pairs[k].surf_b||
+       std::memcmp(&cached->boosts[k],&boosts[k],sizeof(float))!=0)return 13;
+   }
+  }
+ }
  const char* names[]={
   "AI_Nikkor_50mm_F1.2S.lens",
   "AI_Nikkor_28mm_F1.4D.lens",

@@ -5,8 +5,10 @@
 #define FLARELENS_MAC 1
 #endif
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <array>
+#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -36,6 +38,7 @@
 #include "FlareLensHostGeometry.hpp"
 #include "FlareLensHostTrace.hpp"
 #include "FlareLensOptics.hpp"
+#include "FlareLensThreadPool.hpp"
 #ifdef FLARELENS_HAVE_CUDA
 #include "FlareLensGpuBridge.hpp"
 #include "FlareLensGpuDetection.hpp"
@@ -65,6 +68,12 @@ constexpr auto kNativeGpuFramework=PF_GPU_Framework_CUDA;
 constexpr auto kNativeGpuFramework=PF_GPU_Framework_METAL;
 #endif
 constexpr A_long kInputCheckout=1;
+// CUDA renders the diffraction starburst itself; Metal still needs the CPU.
+#if defined(FLARELENS_HAVE_CUDA)
+constexpr bool kGpuStarburst=true;
+#else
+constexpr bool kGpuStarburst=false;
+#endif
 
 struct RGB {float r=0,g=0,b=0,a=0;};
 struct FrameArgs {
@@ -80,7 +89,6 @@ struct FrameArgs {
  float ghost_blur=.0008f,haze_gain=0,haze_radius=.15f,star_gain=0,star_scale=.15f;
  int ghost_blur_passes=3,haze_passes=3;
  bool preview=false,auto_seed=true,auto_detect=false,use_sensor=false,source_alpha=false;
- bool adaptive_preview=true;
  bool fhd_stable_brightness=false; // experimental, existing projects unchanged
  bool host_trace=true;
  int preview_grid=12,preview_max=128,preview_step=8,preview_spectral=3;
@@ -202,6 +210,9 @@ PF_Err params_setup(PF_InData* in,PF_OutData* out){
  AEFX_CLR_STRUCT(def);
  PF_ADD_CHECKBOX("Development Host Trace","On",FALSE,0,56);
  AEFX_CLR_STRUCT(def);
+ // Kept for project compatibility only: reduced-resolution previews always
+ // match the Full frame now (preview_scale), so the control is hidden.
+ def.ui_flags=PF_PUI_INVISIBLE;
  PF_ADD_CHECKBOX("Adaptive Quality for Reduced Resolution","Enable",TRUE,0,57);
  AEFX_CLR_STRUCT(def);
  // The 96 px luminous disk, at scene-linear 64 RGB and Nuke's 4x4 scan,
@@ -297,7 +308,6 @@ FrameArgs from_legacy(PF_InData* in_data,PF_ParamDef* params[]){
  a.pair_a=params[P_PAIR_A]->u.sd.value;
  a.pair_b=params[P_PAIR_B]->u.sd.value;
  a.source_alpha=params[P_SOURCE_ALPHA]->u.bd.value!=0;
- a.adaptive_preview=params[P_ADAPTIVE_PREVIEW]->u.bd.value!=0;
  a.fhd_stable_brightness=params[P_FHD_STABLE_BRIGHTNESS]->u.bd.value!=0;
  return a;
 }
@@ -370,77 +380,141 @@ PF_Err checkout_args(PF_InData* in,FrameArgs& a){
  if((e=load(P_MANUAL_RADIANCE,[&](const PF_ParamDef& v){a.manual_radiance=float(v.u.fs_d.value);})))return e;
  if((e=load(P_MANUAL_DIAMETER,[&](const PF_ParamDef& v){a.manual_diameter_px=float(v.u.fs_d.value);})))return e;
  if((e=load(P_HOST_TRACE,[&](const PF_ParamDef& v){a.host_trace=v.u.bd.value!=0;})))return e;
- if((e=load(P_ADAPTIVE_PREVIEW,[&](const PF_ParamDef& v){a.adaptive_preview=v.u.bd.value!=0;})))return e;
  if((e=load(P_FHD_STABLE_BRIGHTNESS,[&](const PF_ParamDef& v){a.fhd_stable_brightness=v.u.bd.value!=0;})))return e;
  return PF_Err_NONE;
 }
 
+// AE renders Half/Third/Quarter previews into a world downsampled by
+// in_data->downsample_*. They must look like the Full frame scaled down
+// (tests/preview_fidelity_test.cpp): the same optical sampling, a detection
+// step and cluster radius covering the same full-resolution distance, blur
+// radii scaled with the frame, and energy normalised per full-resolution
+// pixel. AE has already scaled the Light Position into the preview world
+// (fl::HostGeometry). At Full every factor is exactly 1, so Full frames are
+// unchanged.
+struct PreviewScale {
+ float scale=1.f;   // rendered pixels per full-resolution pixel (per axis)
+ // Integer downsample per axis (Half = 2): the ghost layer is then traced
+ // and blurred at full resolution and box-averaged onto the preview.
+ int raster_x=1,raster_y=1;
+ int scan_step=4;   // source detection step, in rendered pixels
+ // Energy factors: ghosts traced at full resolution / on the preview
+ // raster (Metal, non-integer ratios), haze, and diffraction.
+ float ghost=1.f,ghost_raster=1.f,haze=1.f,star=1.f;
+};
+PreviewScale preview_scale(const FrameArgs& a,const PF_InData* in){
+ const auto axis=[](const PF_RationalScale& r){
+  return r.num>0&&r.den>0?std::clamp(float(r.num)/float(r.den),1.f/32.f,1.f):1.f;
+ };
+ const float sx=in?axis(in->downsample_x):1.f,sy=in?axis(in->downsample_y):1.f;
+ const float area=sx*sy;
+ PreviewScale p;
+ p.scale=std::sqrt(area);
+ const auto raster=[](const PF_RationalScale& r){
+  return r.num==1&&r.den>=1&&r.den<=32?int(r.den):1;
+ };
+ if(in){p.raster_x=raster(in->downsample_x);p.raster_y=raster(in->downsample_y);}
+ // Use Preview Quality chooses a coarser full-resolution step on purpose.
+ const int base=std::clamp(a.scan_step,1,32);
+ const int step=std::clamp(a.preview?a.preview_step:a.scan_step,1,32);
+ p.scan_step=std::clamp(int(std::lround(float(step)*p.scale)),1,32);
+ if(a.auto_detect){
+  // One source per scan block: the preview has area*base^2/step^2 times
+  // Nuke's full-resolution source count. Restore the per-pixel sum for
+  // full-resolution ghosts and diffraction; ghosts on the preview raster
+  // also land on fewer pixels; haze seeds fill whole blocks (invariant).
+  const float k=float(p.scan_step*p.scan_step)/float(base*base);
+  p.ghost=p.star=k/area;p.ghost_raster=k;p.haze=1.f;
+ }else{
+  // One emitter. Stable Brightness has already scaled it by the rendered
+  // area; ghosts on the preview raster and haze land on fewer pixels.
+  const float emitter=a.fhd_stable_brightness?area:1.f;
+  p.ghost=p.star=1.f/emitter;
+  p.ghost_raster=p.haze=area/emitter;
+ }
+ return p;
+}
+
+// cluster_radius is in rendered pixels (the slider times the downsample).
 std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
                                      const FrameArgs& a,int width,int height,
-                                     float manual_scale_x=1.f,float manual_scale_y=1.f){
+                                     int scan_step,const fl::HostGeometry& geometry,
+                                     float cluster_radius){
  std::vector<fl::Source> sources;
  if(width<=0||height<=0)return sources;
- // AE's point control uses layer-space coordinates and supports off-frame lights.
- const float px=std::isfinite(a.light_x)?a.light_x*manual_scale_x/width:0.5f;
- const float py=std::isfinite(a.light_y)?a.light_y*manual_scale_y/height:0.5f;
+ // AE's point control arrives in rendered pixels and supports off-frame lights.
+ const float px=std::isfinite(a.light_x)?geometry.normalized_x(a.light_x):0.5f;
+ const float py=std::isfinite(a.light_y)?geometry.normalized_y(a.light_y):0.5f;
  if(!a.auto_detect){
   // Nuke normally has one source per *image block*, not one per luminous
   // object. Compress a constant-radiance circular HDR patch into its
   // corresponding Nuke block-source sum without changing Fresnel or gain.
   float r=fl::nuke_equivalent_manual_radiance(
-      a.manual_radiance,a.manual_diameter_px,manual_scale_x,manual_scale_y,
-      a.scan_step,a.max_sources);
+      a.manual_radiance,a.manual_diameter_px,geometry.downsample_x,
+      geometry.downsample_y,a.scan_step,a.max_sources);
   if(a.fhd_stable_brightness)
     r*=fl::fhd_reference_emission_scale(width,height);
   sources.push_back({px,py,r*a.tint_r,r*a.tint_g,r*a.tint_b});
   return sources;
  }
  const int limit=std::clamp(a.preview?a.preview_max:a.max_sources,1,2048);
- const int candidate_limit=a.cluster_radius>0?std::min(8192,limit*4):limit;
+ const int candidate_limit=cluster_radius>0?std::min(8192,limit*4):limit;
  // A bounded priority queue retains the best K samples, not the entire frame.
  struct Ranked {float score;int index;fl::Source src;};
  auto better=[](const Ranked& x,const Ranked& y){
   return x.score>y.score||(x.score==y.score&&x.index<y.index);
  };
  std::priority_queue<Ranked,std::vector<Ranked>,decltype(better)> best(better);
- const int stride=std::clamp(a.preview?a.preview_step:a.scan_step,1,32);
+ const int stride=std::clamp(scan_step,1,32);
  // Match upstream Nuke's exact integer binning: the final floor(w/ds)
  // bucket also contains right/bottom remainder pixels. A ceil grid would
  // silently add extra emitters and change flare brightness on odd formats.
  const int dw=std::max(1,width/stride),dh=std::max(1,height/stride);
- // No intermediate downsample image or second full-frame allocation.
- for(int by=0;by<dh;by++)for(int bx=0;bx<dw;bx++){
-  const int x=bx*stride,y=by*stride;
-  const int end_x=(bx==dw-1)?width:std::min(width,x+stride);
-  const int end_y=(by==dh-1)?height:std::min(height,y+stride);
-  double sum_r=0,sum_g=0,sum_b=0,sum_a=0;
-  int count=0;
-  for(int yy=y;yy<end_y;yy++)for(int xx=x;xx<end_x;xx++){
-   const auto p=pixel(input,xx-(input?input->origin_x:0),
-                            yy-(input?input->origin_y:0),depth);
-   if(!std::isfinite(p.r)||!std::isfinite(p.g)||!std::isfinite(p.b))continue;
-   sum_r+=p.r;sum_g+=p.g;sum_b+=p.b;
-   sum_a+=a.source_alpha?std::clamp(p.a,0.f,1.f):1.f;
-   count++;
-  }
-  if(count==0)continue;
-  float r=float(sum_r/count),g=float(sum_g/count),b=float(sum_b/count);
-  float score=.2126f*r+.7152f*g+.0722f*b;
-  if(!std::isfinite(score))continue;
-  // Preserve Nuke's sequence: cap before mask, then threshold the masked luma.
-  if(a.source_cap>0&&score>a.source_cap){
-   const float k=a.source_cap/score;
-   r*=k;g*=k;b*=k;score=a.source_cap;
-  }
-  const float mask=float(sum_a/count);
-  r*=mask;g*=mask;b*=mask;score*=mask;
-  if(score<a.threshold)continue;
-  // Nuke reports the nominal block centre, not the centroid of the
-  // remainder pixels included in the final (right/bottom) bucket.
-  const float cx=.5f*(x+std::min(x+stride,width));
-  const float cy=.5f*(y+std::min(y+stride,height));
-  const Ranked cand{score,by*dw+bx,{cx/width,cy/height,
+ // Block averages are independent: score every block on the worker pool,
+ // then rank them in the original block order so the selection (including
+ // ties) is identical to the serial scan.
+ std::vector<Ranked> blocks(size_t(dw)*dh);
+ std::vector<uint8_t> accepted(size_t(dw)*dh,0);
+ fl::parallel_for(dh,[&](int by){
+  for(int bx=0;bx<dw;bx++){
+   const int x=bx*stride,y=by*stride;
+   const int end_x=(bx==dw-1)?width:std::min(width,x+stride);
+   const int end_y=(by==dh-1)?height:std::min(height,y+stride);
+   double sum_r=0,sum_g=0,sum_b=0,sum_a=0;
+   int count=0;
+   for(int yy=y;yy<end_y;yy++)for(int xx=x;xx<end_x;xx++){
+    const auto p=pixel(input,xx-(input?input->origin_x:0),
+                             yy-(input?input->origin_y:0),depth);
+    if(!std::isfinite(p.r)||!std::isfinite(p.g)||!std::isfinite(p.b))continue;
+    sum_r+=p.r;sum_g+=p.g;sum_b+=p.b;
+    sum_a+=a.source_alpha?std::clamp(p.a,0.f,1.f):1.f;
+    count++;
+   }
+   if(count==0)continue;
+   float r=float(sum_r/count),g=float(sum_g/count),b=float(sum_b/count);
+   float score=.2126f*r+.7152f*g+.0722f*b;
+   if(!std::isfinite(score))continue;
+   // Preserve Nuke's sequence: cap before mask, then threshold the masked luma.
+   if(a.source_cap>0&&score>a.source_cap){
+    const float k=a.source_cap/score;
+    r*=k;g*=k;b*=k;score=a.source_cap;
+   }
+   const float mask=float(sum_a/count);
+   r*=mask;g*=mask;b*=mask;score*=mask;
+   if(score<a.threshold)continue;
+   // Nuke reports the nominal block centre, not the centroid of the
+   // remainder pixels included in the final (right/bottom) bucket.
+   const float cx=.5f*(x+std::min(x+stride,width));
+   const float cy=.5f*(y+std::min(y+stride,height));
+   const size_t index=size_t(by)*dw+bx;
+   blocks[index]={score,by*dw+bx,{cx/width,cy/height,
                          r*a.tint_r,g*a.tint_g,b*a.tint_b}};
+   accepted[index]=1;
+  }
+ });
+ for(size_t index=0;index<blocks.size();index++){
+  if(!accepted[index])continue;
+  const Ranked& cand=blocks[index];
   if(int(best.size())<candidate_limit)best.push(cand);
   else if(better(cand,best.top())){best.pop();best.push(cand);}
  }
@@ -449,8 +523,8 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
  while(!best.empty()){ranked.push_back(best.top());best.pop();}
  std::sort(ranked.begin(),ranked.end(),better);
  for(const auto& s:ranked)sources.push_back(s.src);
- if(a.cluster_radius>0&&sources.size()>1){
-  const float radius2=float(a.cluster_radius)*a.cluster_radius;
+ if(cluster_radius>0&&sources.size()>1){
+  const float radius2=cluster_radius*cluster_radius;
   std::vector<fl::Source> clustered;
   std::vector<uint8_t> consumed(sources.size());
   for(size_t i=0;i<sources.size();i++){
@@ -486,16 +560,9 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
 fl::Settings optical_settings(const FrameArgs& a,const PF_InData* in){
  fl::Settings s{};
  s.gain=std::isfinite(a.gain)?std::max(0.f,a.gain):0.f;
- // During AE adaptive-resolution interaction, reduce only the optical
- // sampling density. The full-resolution final render is unaffected.
- // This toggle can be disabled for identical high-density half-res exports.
- const bool reduced=in&&a.adaptive_preview&&
-   ((in->downsample_x.num>0&&in->downsample_x.den>0&&
-     in->downsample_x.num<in->downsample_x.den)||
-    (in->downsample_y.num>0&&in->downsample_y.den>0&&
-     in->downsample_y.num<in->downsample_y.den));
- s.grid=std::clamp(a.preview?a.preview_grid:
-     reduced?std::min(a.grid,std::max(2,a.preview_grid)):a.grid,2,2048);
+ // AE's reduced-resolution previews keep the Full frame's optical sampling
+ // (see preview_scale); only Use Preview Quality trades it for speed.
+ s.grid=std::clamp(a.preview?a.preview_grid:a.grid,2,2048);
  s.max_pairs=2048;
  s.fov_h_deg=std::isfinite(a.fov)?std::clamp(a.fov,1.f,150.f):40.f;
  s.fov_v_deg=std::isfinite(a.fov_vertical)?std::clamp(a.fov_vertical,0.f,150.f):0.f;
@@ -505,22 +572,9 @@ fl::Settings optical_settings(const FrameArgs& a,const PF_InData* in){
  }
  s.aperture_blades=std::clamp(a.aperture_blades,0,16);
  s.aperture_rotation_deg=a.aperture_rotation;
- s.spectral_samples=(a.preview||reduced)?a.preview_spectral:a.spectral;
- // Nuke's preview compensates reduced HDR source tile density by the
- // *square* of the scan-step ratio. AE adaptive downsampling also reduces
- // the pixel count, so account for the actual world-to-layer area scale.
- // Keep full-resolution/Nuke-exact rendering unchanged.
- if(a.auto_detect&&(a.preview||reduced)){
-  const float base_step=float(std::clamp(a.scan_step,1,32));
-  const float preview_step=float(std::clamp(a.preview_step,1,32));
-  const float ratio=preview_step/base_step;
-  float pixel_area=1.f;
-  if(in&&in->downsample_x.num>0&&in->downsample_y.num>0)
-    pixel_area=std::clamp(float(
-      double(in->downsample_x.den)/in->downsample_x.num*
-      double(in->downsample_y.den)/in->downsample_y.num),1.f,256.f);
-  s.gain*=ratio*ratio*pixel_area;
- }
+ s.spectral_samples=a.preview?a.preview_spectral:a.spectral;
+ // The callers apply preview_scale()'s ghost energy factor (which also
+ // carries Nuke's step-ratio^2 compensation for Use Preview Quality).
  s.pupil_jitter=std::clamp(a.jitter,0,3);
  s.jitter_seed=a.auto_seed&&in&&in->time_step>0?
      int(in->current_time/in->time_step):a.seed;
@@ -580,12 +634,16 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   double(args.ghost_blur),active_catalog_id(args));
  fl::host_trace(args.host_trace,"CPU_BEGIN",render_begin);
  fl::Settings settings=optical_settings(args,in);
- // Manual position is in full-resolution layer coords; never normalize by
- // the size of an AE checkout ROI or a half-resolution SmartFX world.
- // For detected sources we must sample the full requested frame.
- // The source scanner uses input origin for ROI mapping in pixel().
+ const PreviewScale preview=preview_scale(args,in);
+ const bool full_ghosts=preview.raster_x>1||preview.raster_y>1;
+ settings.gain*=full_ghosts?preview.ghost:preview.ghost_raster;
+ const int ghost_w=frame_w*preview.raster_x,ghost_h=frame_h*preview.raster_y;
+ // The manual position is a fraction of the whole sensor, never of an AE
+ // checkout ROI. For detected sources we must sample the full requested
+ // frame; the source scanner uses input origin for ROI mapping in pixel().
  const auto sources=find_sources(input,source_depth,args,frame_w,frame_h,
-                                 geometry.light_scale_x,geometry.light_scale_y);
+                                 preview.scan_step,geometry,
+                                 float(args.cluster_radius)*preview.scale);
  // A ray-hit diagnostic shows valid optical geometry independently of
  // Fresnel energy, exposure and 8/16/32bpc output quantization.
  if(std::clamp(args.output_mode,1,8)==7)settings.debug_ray_density=true;
@@ -611,7 +669,7 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   return PF_Err_BAD_CALLBACK_PARAM;
  }
  auto ghost=!render_ghost?fl::Image{}:fl::render_sources_parallel(
-    *lens,sources,settings,frame_w,frame_h,
+    *lens,sources,settings,ghost_w,ghost_h,
     {[](void* ctx)->int{return int(PF_ABORT(static_cast<PF_InData*>(ctx)));},in},
     3);
  if(ghost.abort_error)return static_cast<PF_Err>(ghost.abort_error);
@@ -633,25 +691,46 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   fl::host_trace(args.host_trace,"CPU_GHOST",facts);
  }
  if(!ghost.rgb.empty()&&args.ghost_blur>0){
-  const int radius=std::max(1,int(std::round(args.ghost_blur*std::hypot(float(frame_w),float(frame_h)))));
-  fl::box_blur_rgb(ghost.rgb,frame_w,frame_h,radius,args.ghost_blur_passes);
+  // At full resolution the Full frame's own radius; otherwise the box with
+  // the Full blur's variance on the preview raster.
+  const fl::BlurRadius radius=fl::frame_blur_radius(args.ghost_blur,ghost_w,ghost_h,
+                                                    full_ghosts?1.f:preview.scale,true);
+  fl::box_blur_rgb(ghost.rgb,ghost_w,ghost_h,radius.whole,args.ghost_blur_passes,
+                   radius.fraction);
+ }
+ if(full_ghosts&&!ghost.rgb.empty()){
+  // An integer AE preview: the Full ghost layer, box-averaged.
+  auto reduced=fl::box_downscale_rgb(ghost.rgb,ghost_w,ghost_h,
+                                     preview.raster_x,preview.raster_y);
+  fl::release_buffer(std::move(ghost.rgb));
+  ghost.rgb=std::move(reduced);
+  ghost.width=frame_w;ghost.height=frame_h;
  }
  // Accumulate post-process passes into a single full-frame RGB image instead
  // of retaining three large images until the host has been composited.
  std::vector<float> post;
+ if((render_haze_pass&&args.haze_gain>0)||(render_star_pass&&args.star_gain>0))
+  post=fl::acquire_buffer(size_t(frame_w)*frame_h*3);
  const auto merge_post=[&](){
   if(post.empty())return;
   if(ghost.rgb.empty()){ghost.rgb.swap(post);return;}
-  for(size_t i=0;i<ghost.rgb.size();i++)ghost.rgb[i]+=post[i];
+  float* dst=ghost.rgb.data();
+  const float* add=post.data();
+  fl::parallel_for(frame_h,[&](int y){
+   const size_t begin=size_t(y)*frame_w*3,end=begin+size_t(frame_w)*3;
+   for(size_t i=begin;i<end;i++)dst[i]+=add[i];
+  });
  };
  if(render_haze_pass&&args.haze_gain>0){
-  fl::render_haze(post,sources,frame_w,frame_h,args.haze_gain,args.haze_radius,args.haze_passes,
-      args.auto_detect?std::clamp(args.preview?args.preview_step:args.scan_step,1,32):1);
+  fl::render_haze(post,sources,frame_w,frame_h,args.haze_gain*preview.haze,
+      args.haze_radius,args.haze_passes,args.auto_detect?preview.scan_step:1,
+      preview.scale);
   merge_post();
  }
  if(render_star_pass&&args.star_gain>0){
   fl::render_diffraction(post,sources,frame_w,frame_h,settings.aperture_blades,
-       settings.aperture_rotation_deg,args.star_gain,args.star_scale);
+       settings.aperture_rotation_deg,args.star_gain*preview.star,args.star_scale,
+       preview.raster_x==preview.raster_y?preview.raster_x:1);
   merge_post();
  }
  float optical_diagnostic_peak=0.f;
@@ -675,8 +754,15 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
    }
   }
  }
- for(int y=0;y<h;y++){
-  if((y&31)==0){const PF_Err cancelled=PF_ABORT(in);if(cancelled)return cancelled;}
+ // Rows are independent: worker threads convert and write pixels; only the
+ // AE render thread polls PF_ABORT.
+ const std::thread::id render_thread=std::this_thread::get_id();
+ std::atomic<PF_Err> cancelled{PF_Err_NONE};
+ fl::parallel_for(h,[&](int y){
+  if(cancelled.load(std::memory_order_relaxed))return;
+  if((y&31)==0&&std::this_thread::get_id()==render_thread){
+   if(const PF_Err e=PF_ABORT(in)){cancelled.store(e);return;}
+  }
   for(int x=0;x<w;x++){
    const int fx=geometry.global_x(x),fy=geometry.global_y(y);
    auto color=pixel(input,fx-(input?input->origin_x:0),
@@ -737,7 +823,10 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
    }
    put(output,x,y,depth,color);
   }
- }
+ });
+ fl::release_buffer(std::move(ghost.rgb));
+ fl::release_buffer(std::move(post));
+ if(const PF_Err e=cancelled.load())return e;
  if(args.host_trace){
   char status[500]={};
   std::snprintf(status,sizeof(status),
@@ -794,7 +883,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  const bool native_gpu_input_eligible=extra->input->what_gpu==kNativeGpuFramework&&
    (args.output_mode==1||args.output_mode==2||
     args.output_mode==3||args.output_mode==4||
-    args.output_mode==5)&&args.star_gain<=0;
+    args.output_mode==5)&&(kGpuStarburst||args.star_gain<=0);
  request.rect=(args.auto_detect||native_gpu_input_eligible)?full:visible;
 #else
  request.rect=args.auto_detect?full:visible;
@@ -829,11 +918,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  const bool gpu_output=args.output_mode==1||args.output_mode==2||
                        args.output_mode==3||args.output_mode==4||
                        args.output_mode==5;
- const bool scaled_preview=args.adaptive_preview&&
-  ((in->downsample_x.num>0&&in->downsample_x.num<in->downsample_x.den)||
-   (in->downsample_y.num>0&&in->downsample_y.num<in->downsample_y.den));
- const int scan_step=args.preview||scaled_preview?
-   args.preview_step:args.scan_step;
+ const int scan_step=preview_scale(args,in).scan_step;
 #ifdef FLARELENS_HAVE_CUDA
  const bool detectable=!args.auto_detect||
   fl::gpu::detection_scratch_bytes(full.right,full.bottom,
@@ -862,7 +947,7 @@ PF_Err pre_render(PF_InData* in,PF_PreRenderExtra* extra){
  const bool gpu_memory_eligible=true;
 #endif
  const bool can_gpu=extra->input->what_gpu==kNativeGpuFramework&&
-   detectable&&gpu_output&&args.star_gain<=0&&gpu_memory_eligible&&
+   detectable&&gpu_output&&(kGpuStarburst||args.star_gain<=0)&&gpu_memory_eligible&&
    valid_scale&&gpu_geometry&&full.right>0&&full.bottom>0&&
    in->width<=16384&&in->height<=16384;
  if(can_gpu)extra->output->flags|=PF_RenderOutputFlag_GPU_RENDER_POSSIBLE;
@@ -905,7 +990,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
  const bool supported_mode=args.output_mode==1||args.output_mode==2||
                            args.output_mode==3||args.output_mode==4||
                            args.output_mode==5;
- if(!supported_mode||args.star_gain>0)
+ if(!supported_mode||(!kGpuStarburst&&args.star_gain>0))
   return PF_Err_BAD_CALLBACK_PARAM;
  PF_EffectWorld* input=nullptr;
  PF_EffectWorld* output=nullptr;
@@ -992,7 +1077,16 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       (input->width!=full_w||input->height!=full_h||
        input->origin_x!=0||input->origin_y!=0)))
      err=PF_Err_BAD_CALLBACK_PARAM;
-   const fl::Settings settings=optical_settings(args,in);
+   fl::Settings settings=optical_settings(args,in);
+   const PreviewScale preview=preview_scale(args,in);
+#ifdef FLARELENS_HAVE_CUDA
+   // CUDA keeps a full-resolution ghost layer for integer previews.
+   const int raster_x=preview.raster_x,raster_y=preview.raster_y;
+#else
+   const int raster_x=1,raster_y=1; // Metal renders on the preview raster
+#endif
+   const bool full_ghosts=raster_x>1||raster_y>1;
+   settings.gain*=full_ghosts?preview.ghost:preview.ghost_raster;
    // Even with a tiny AE output tile, detection and physical ray scattering
    // refer to the SAME complete optical sensor.
    const int w=full_w,h=full_h;
@@ -1002,7 +1096,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       geometry.normalized_y(args.light_y):.5f;
    float radiance=fl::nuke_equivalent_manual_radiance(
      args.manual_radiance,args.manual_diameter_px,
-     geometry.light_scale_x,geometry.light_scale_y,
+     geometry.downsample_x,geometry.downsample_y,
      args.scan_step,args.max_sources);
    if(args.fhd_stable_brightness)
      radiance*=fl::fhd_reference_emission_scale(w,h);
@@ -1011,16 +1105,12 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     // The CPU stage receives tile metadata only. Input RGB remains on the
     // host-managed CUDA world; source extraction and ghost rays share the
     // exact AE CUDA stream for correct MFR ordering.
-    const bool scaled_preview=args.adaptive_preview&&
-      ((in->downsample_x.num>0&&in->downsample_x.num<in->downsample_x.den)||
-       (in->downsample_y.num>0&&in->downsample_y.num<in->downsample_y.den));
-    const bool reduced=args.preview||scaled_preview;
     fl::gpu::DetectionSettings detect{};
     detect.width=w;detect.height=h;
     detect.input_pitch_bytes=input?input->rowbytes:0;
-    detect.scan_step=std::clamp(reduced?args.preview_step:args.scan_step,1,32);
-    detect.max_sources=std::clamp(reduced?args.preview_max:args.max_sources,1,2048);
-    detect.cluster_radius=args.cluster_radius;
+    detect.scan_step=preview.scan_step;
+    detect.max_sources=std::clamp(args.preview?args.preview_max:args.max_sources,1,2048);
+    detect.cluster_radius=float(args.cluster_radius)*preview.scale;
     detect.source_threshold=args.threshold;
     detect.source_cap=args.source_cap;
     detect.tint_r=args.tint_r;detect.tint_g=args.tint_g;detect.tint_b=args.tint_b;
@@ -1079,20 +1169,16 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       args.ghost_blur>0&&args.ghost_blur_passes>0;
    const bool haze_active=(args.output_mode==1||args.output_mode==2||
        args.output_mode==5)&&args.haze_gain>0;
-   const bool reduced_haze=args.preview||
-     (args.adaptive_preview&&((in->downsample_x.num>0&&
-      in->downsample_x.num<in->downsample_x.den)||
-      (in->downsample_y.num>0&&
-       in->downsample_y.num<in->downsample_y.den)));
-   const int haze_footprint=args.auto_detect?
-      std::clamp(reduced_haze?args.preview_step:args.scan_step,1,32):1;
+   const int haze_footprint=args.auto_detect?preview.scan_step:1;
    const bool dense_haze=haze_active&&
       (sources.size()>8||haze_footprint>1);
 #ifdef FLARELENS_HAVE_CUDA
+   const bool star_active=(args.output_mode==1||args.output_mode==2)&&
+      args.star_gain>0;
    const size_t scratch_bytes=(sources.empty()||!lens)?0:
       fl::gpu::scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
        args.output_mode,need_ghost_blur,dense_haze,
-       haze_active&&!dense_haze);
+       haze_active&&!dense_haze,star_active,raster_x,raster_y);
 #else
    const size_t scratch_bytes=(sources.empty()||!lens)?0:
       fl::gpu::metal_scratch_bytes(*lens,int(sources.size()),settings.grid,w,h,
@@ -1116,10 +1202,18 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     view.output_mode=args.output_mode;
     view.ghost_blur=args.ghost_blur;
     view.ghost_blur_passes=args.ghost_blur_passes;
-    view.haze_gain=args.haze_gain;
+    view.haze_gain=args.haze_gain*preview.haze;
+    view.resolution_scale=preview.scale;
+    view.raster_x=raster_x;view.raster_y=raster_y;
     view.haze_radius=args.haze_radius;
     view.haze_passes=args.haze_passes;
     view.haze_footprint=haze_footprint;
+#ifdef FLARELENS_HAVE_CUDA
+    view.star_gain=args.star_gain*preview.star;
+    view.star_scale=args.star_scale;
+    view.star_blades=settings.aperture_blades;
+    view.star_rotation=settings.aperture_rotation_deg;
+#endif
     view.command_stream=device_info.command_queuePV;
     view.check_abort=[](void* context)->int{
       return int(PF_ABORT(static_cast<PF_InData*>(context)));
@@ -1230,6 +1324,10 @@ PF_Err EffectMain(PF_Cmd cmd,PF_InData* in,PF_OutData* out,
     // AE 25.6 header: this flag is required in GLOBAL_SETUP as well as device setup.
     out->out_flags2|=PF_OutFlag2_SUPPORTS_GPU_RENDER_F32;
 #endif
+    return PF_Err_NONE;
+   case PF_Cmd_GLOBAL_SETDOWN:
+    // Join CPU workers and free cached frames before the plug-in unloads.
+    fl::shutdown_thread_pool();
     return PF_Err_NONE;
    case PF_Cmd_PARAMS_SETUP:return params_setup(in,out);
    case PF_Cmd_USER_CHANGED_PARAM:{

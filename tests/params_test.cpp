@@ -12,6 +12,13 @@
 #include "../src/FlareLensCustom.hpp"
 #include "FlareLensCatalog.hpp"
 #include <cstring>
+// Older After Effects SDK headers expose these members directly.
+#ifndef PF_DEF_NAME
+#define PF_DEF_NAME name
+#endif
+#ifndef PF_DEF_NAMESPTR
+#define PF_DEF_NAMESPTR namesptr
+#endif
 using Main=PF_Err(*)(PF_Cmd,PF_InData*,PF_OutData*,PF_ParamDef**,PF_LayerDef*,void*);
 static std::vector<PF_ParamDef> capture;
 static PF_Err collect(PF_ProgPtr,PF_ParamIndex idx,PF_ParamDefPtr p){

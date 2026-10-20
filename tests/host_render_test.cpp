@@ -39,13 +39,13 @@ static PF_Err world_format(const PF_EffectWorld*,PF_PixelFormat* format){
  *format=g_format;
  return PF_Err_NONE;
 }
-static SPErr SPAPI acquire(const char* name,int32 version,const void** suite){
+static SPErr SPAPI acquire(const char* name,int version,const void** suite){
  if(!name||!suite||std::strcmp(name,kPFWorldSuite)!=0||
     version!=kPFWorldSuiteVersion2)return 1;
  *suite=&g_world;
  return 0;
 }
-static SPErr SPAPI release(const char*,int32){return 0;}
+static SPErr SPAPI release(const char*,int){return 0;}
 
 static int render(Main effect,PF_InData& in,int w,int h,PF_PixelFormat format,
                   int mode=1,int quick_preset=1,int catalog_id=0,
@@ -226,8 +226,11 @@ static int render_smart_empty(Main effect,PF_InData& in){
 
 
 // Same physical source and Nuke optics must give exactly the same pixels
-// regardless of AE checkout ROI. Point Control remains full-resolution even
-// when the host asks for a half-resolution buffer.
+// regardless of AE checkout ROI. Like After Effects, the host scales the
+// Point Control into the half-resolution buffer it asks for; that Half
+// preview is the Full frame box-averaged (tests/preview_fidelity_test.cpp
+// checks every pass in float; here 8-bit output allows one code value of
+// rounding).
 static int render_roi_and_downsample(Main effect,PF_InData& in){
  constexpr int full_w=960,full_h=540;
  auto render_world=[&](int source_w,int source_h,
@@ -282,18 +285,39 @@ static int render_roi_and_downsample(Main effect,PF_InData& in){
     return 51;
    }
   }
+  const auto full=render_world(2*full_w,2*full_h,1,1,0,0,
+                               2*full_w,2*full_h,760,420);
   const auto half=render_world(2*full_w,2*full_h,1,2,0,0,
-                               full_w,full_h,760,420);
-  if(half.size()!=baseline.size())return 52;
-  for(size_t i=0;i<half.size();i++)
-   if(std::memcmp(&half[i],&baseline[i],sizeof(PF_Pixel))!=0){
-    std::cerr<<"REAL_AEX_HALF_RES_MISMATCH pixel "<<i<<"\n";
-    return 53;
+                               full_w,full_h,380,210);
+  if(half.size()!=baseline.size()||full.size()!=4*baseline.size())return 52;
+  double difference=0,total=0;
+  for(int y=0;y<full_h;y++)for(int x=0;x<full_w;x++){
+   const auto& h=half[size_t(y)*full_w+x];
+   const PF_Pixel* f[4]={&full[size_t(2*y)*2*full_w+2*x],&full[size_t(2*y)*2*full_w+2*x+1],
+                         &full[size_t(2*y+1)*2*full_w+2*x],&full[size_t(2*y+1)*2*full_w+2*x+1]};
+   const double want[3]={(f[0]->red+f[1]->red+f[2]->red+f[3]->red)/4.,
+                         (f[0]->green+f[1]->green+f[2]->green+f[3]->green)/4.,
+                         (f[0]->blue+f[1]->blue+f[2]->blue+f[3]->blue)/4.};
+   const double got[3]={double(h.red),double(h.green),double(h.blue)};
+   for(int c=0;c<3;c++){
+    if(std::fabs(got[c]-want[c])>1.5){
+     std::cerr<<"REAL_AEX_HALF_RES_MISMATCH pixel "<<x<<","<<y<<"\n";
+     return 53;
+    }
+    difference+=std::fabs(got[c]-want[c]);total+=want[c];
    }
+  }
+  // Averaging four 8-bit values against one rounded value: at most half a
+  // code value apart on average.
+  const double mean_codes=difference/(3.*double(full_w)*full_h);
+  if(total<=0||mean_codes>.5){
+   std::cerr<<"REAL_AEX_HALF_RES_MEAN_CODE_ERROR "<<mean_codes<<"\n";return 53;
+  }
   std::cout<<"HOSTLESS_AEX_ROI_AND_DOWNSAMPLE_PIXELS_MATCHED"
            <<" full="<<full_w<<"x"<<full_h
            <<" ROI="<<rw<<"x"<<rh<<"@("<<rx<<","<<ry<<")"
-           <<" half_input="<<2*full_w<<"x"<<2*full_h<<"\n";
+           <<" half_of="<<2*full_w<<"x"<<2*full_h
+           <<" half_vs_full_mean_codes="<<mean_codes<<"\n";
   return 0;
  }catch(int code){
   std::cerr<<"ROI test AEX error "<<code<<"\n";

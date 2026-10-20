@@ -1,5 +1,6 @@
 #include "FlareLensGpuBridge.hpp"
 #include "FlareLensComposite.hpp"
+#include "FlareLensCpuParallel.hpp"
 #include <cuda_runtime.h>
 #include <chrono>
 #include <algorithm>
@@ -130,7 +131,9 @@ int main(){
  if(cudaMemcpy(high_gpu.data(),out,bytes,cudaMemcpyDeviceToHost)!=cudaSuccess){
   clean();return 44;
  }
- const auto high_cpu=fl::render_cpu(lens,sources,cfg,w,h);
+ // Above the mesh threshold both renderers use the interpolated pupil mesh
+ // (FlareLensMesh.hpp); compare CUDA with the CPU renderer of that method.
+ const auto high_cpu=fl::render_sources_parallel(lens,sources,cfg,w,h,{},3);
  double high_diff=0.,high_energy=0.;
  for(size_t i=0;i<n;i++)for(int c=0;c<3;c++){
   const double actual=double(high_gpu[i*4+2-c]-bg[i*4+2-c]);

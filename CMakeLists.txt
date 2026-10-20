@@ -12,11 +12,17 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(AE_SDK_ROOT "$ENV{AE_SDK_ROOT}" CACHE PATH "Adobe AE SDK Examples directory")
 add_library(FlareLensCore STATIC upstream/src/lens.cpp upstream/src/trace.cpp
             upstream/src/ghost.cpp upstream/src/starburst.cpp src/FlareLensCore.cpp
-            src/FlareLensOptics.cpp src/FlareLensCpuParallel.cpp)
+            src/FlareLensOptics.cpp src/FlareLensCpuParallel.cpp
+            src/FlareLensThreadPool.cpp)
 target_include_directories(FlareLensCore PUBLIC upstream/src src)
 target_compile_definitions(FlareLensCore PRIVATE _CRT_SECURE_NO_WARNINGS)
 if(MSVC)
  target_compile_options(FlareLensCore PRIVATE /utf-8)
+ # 8-wide ghost tracer; selected at run time only when the CPU has AVX2.
+ target_sources(FlareLensCore PRIVATE src/FlareLensCpuTraceAvx2.cpp)
+ set_source_files_properties(src/FlareLensCpuTraceAvx2.cpp PROPERTIES
+   COMPILE_OPTIONS "/arch:AVX2")
+ target_compile_definitions(FlareLensCore PRIVATE FLARELENS_HAVE_AVX2_TRACE=1)
 endif()
 add_executable(FlareLensCoreTest tests/core_test.cpp)
 target_link_libraries(FlareLensCoreTest PRIVATE FlareLensCore)
@@ -43,6 +49,12 @@ add_test(NAME FlareLensCatalogTest COMMAND FlareLensCatalogTest)
 add_executable(FlareLensCpuParallelTest tests/cpu_parallel_test.cpp)
 target_link_libraries(FlareLensCpuParallelTest PRIVATE FlareLensCore)
 add_test(NAME FlareLensCpuParallelTest COMMAND FlareLensCpuParallelTest)
+add_executable(FlareLensCpuTraceGroupTest tests/cpu_trace_group_test.cpp)
+target_link_libraries(FlareLensCpuTraceGroupTest PRIVATE FlareLensCore)
+if(MSVC)
+ target_compile_definitions(FlareLensCpuTraceGroupTest PRIVATE FLARELENS_HAVE_AVX2_TRACE=1)
+endif()
+add_test(NAME FlareLensCpuTraceGroupTest COMMAND FlareLensCpuTraceGroupTest)
 # Embed the EXACT upstream Nuke catalog in the AEX. No .lens deployment
 # required for rendering; presets never silently fall back to Nikkor 50mm.
 set(FLARE_LENS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/upstream/lenses/lens_files")
@@ -212,6 +224,12 @@ if(FLARELENS_BUILD_AE)
  add_dependencies(FlareLensHostRenderTest FlareLensAE)
  set_target_properties(FlareLensHostRenderTest PROPERTIES OUTPUT_NAME FlareLensHostRenderTest_v138)
  add_test(NAME FlareLensHostRenderTest COMMAND FlareLensHostRenderTest)
+ # Half/Third/Quarter previews must match the Full frame scaled down.
+ add_executable(FlareLensPreviewFidelityTest tests/preview_fidelity_test.cpp)
+ target_include_directories(FlareLensPreviewFidelityTest PRIVATE
+   src upstream/src "${AE_SDK_ROOT}/Headers" "${AE_SDK_ROOT}/Headers/SP")
+ add_dependencies(FlareLensPreviewFidelityTest FlareLensAE)
+ add_test(NAME FlareLensPreviewFidelityTest COMMAND FlareLensPreviewFidelityTest)
  add_executable(FlareLensHdrDepthTest tests/hdr_depth_test.cpp)
  target_include_directories(FlareLensHdrDepthTest PRIVATE
    "${AE_SDK_ROOT}/Headers" "${AE_SDK_ROOT}/Headers/SP")
@@ -232,25 +250,30 @@ if(FLARELENS_BUILD_AE)
   if(CMAKE_CUDA_COMPILER)
    enable_language(CUDA)
    find_package(CUDAToolkit REQUIRED)
+   # Machine code only (no embedded PTX): Turing, Ampere, Ada and consumer
+   # Blackwell (RTX 50). sm_120 SASS is required there: a driver older than
+   # the toolkit cannot JIT newer PTX. GPUs outside this list use the CPU path.
+   set(FLARE_CUDA_ARCHITECTURES "75-real;86-real;89-real;120-real" CACHE STRING
+       "CUDA architectures for FlareSimAE kernels")
    target_sources(FlareLensAE PRIVATE src/FlareLensGpu.cu src/FlareLensGpuDetection.cu)
    target_compile_definitions(FlareLensAE PRIVATE FLARELENS_HAVE_CUDA=1)
    target_compile_definitions(FlareLensEntryTest PRIVATE FLARELENS_HAVE_CUDA=1)
    target_compile_definitions(FlareLensHostRenderTest PRIVATE FLARELENS_HAVE_CUDA=1)
    target_link_libraries(FlareLensAE PRIVATE CUDA::cudart_static)
    set_target_properties(FlareLensAE PROPERTIES CUDA_STANDARD 17
-     CUDA_ARCHITECTURES "75;86;89")
+     CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_executable(FlareLensGpuDetectionTest
      tests/gpu_detection_test.cpp src/FlareLensGpuDetection.cu)
    target_link_libraries(FlareLensGpuDetectionTest PRIVATE FlareLensCore CUDA::cudart_static)
    target_compile_options(FlareLensGpuDetectionTest PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
    set_target_properties(FlareLensGpuDetectionTest PROPERTIES
-     CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+     CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensGpuDetectionTest COMMAND FlareLensGpuDetectionTest)
    set_tests_properties(FlareLensGpuDetectionTest PROPERTIES SKIP_RETURN_CODE 77)
    add_executable(FlareLensGpuTest tests/gpu_test.cpp src/FlareLensGpu.cu)
    target_link_libraries(FlareLensGpuTest PRIVATE FlareLensCore CUDA::cudart_static)
    target_compile_options(FlareLensGpuTest PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
-   set_target_properties(FlareLensGpuTest PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+   set_target_properties(FlareLensGpuTest PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensGpuTest COMMAND FlareLensGpuTest)
    set_tests_properties(FlareLensGpuTest PROPERTIES SKIP_RETURN_CODE 77)
    # Required: Nuke-equivalent GPU blur/haze, transparent AE RGBA, and the
@@ -259,14 +282,14 @@ if(FLARELENS_BUILD_AE)
    target_link_libraries(FlareLensGpuPostTest PRIVATE FlareLensCore CUDA::cudart_static)
    target_compile_options(FlareLensGpuPostTest PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
    set_target_properties(FlareLensGpuPostTest PROPERTIES
-      CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+      CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensGpuPostTest COMMAND FlareLensGpuPostTest)
    set_tests_properties(FlareLensGpuPostTest PROPERTIES SKIP_RETURN_CODE 77)
    add_executable(FlareLensGpuStreamTest tests/gpu_stream_test.cpp src/FlareLensGpu.cu)
    target_link_libraries(FlareLensGpuStreamTest PRIVATE FlareLensCore CUDA::cudart_static)
    target_compile_options(FlareLensGpuStreamTest PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
    set_target_properties(FlareLensGpuStreamTest PROPERTIES
-     CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+     CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensGpuStreamTest COMMAND FlareLensGpuStreamTest)
    set_tests_properties(FlareLensGpuStreamTest PROPERTIES SKIP_RETURN_CODE 77)
    # Loads the actual built .aex and executes the production CUDA SmartFX
@@ -288,7 +311,7 @@ if(FLARELENS_BUILD_AE)
    target_compile_options(FlareLensUpstreamReference PRIVATE
      $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
    set_target_properties(FlareLensUpstreamReference PROPERTIES
-     CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+     CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensUpstreamReference COMMAND FlareLensUpstreamReference)
    set_tests_properties(FlareLensUpstreamReference PROPERTIES
      SKIP_RETURN_CODE 77 FIXTURES_SETUP NukeReference)
@@ -299,14 +322,19 @@ if(FLARELENS_BUILD_AE)
    target_compile_options(FlareLensUpstreamParity PRIVATE
      $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
    set_target_properties(FlareLensUpstreamParity PROPERTIES
-     CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+     CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
    add_test(NAME FlareLensUpstreamParity COMMAND FlareLensUpstreamParity)
    set_tests_properties(FlareLensUpstreamParity PROPERTIES
      SKIP_RETURN_CODE 77 FIXTURES_REQUIRED NukeReference)
    add_executable(FlareLensBenchmark tests/bench.cpp src/FlareLensGpu.cu)
    target_link_libraries(FlareLensBenchmark PRIVATE FlareLensCore CUDA::cudart_static)
    target_compile_options(FlareLensBenchmark PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
-   set_target_properties(FlareLensBenchmark PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "75;86;89")
+   set_target_properties(FlareLensBenchmark PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
+   # 1080p CPU + CUDA frame timing with baseline image comparison.
+   add_executable(FlareLensFrameBenchmark tests/frame_bench.cpp src/FlareLensGpu.cu)
+   target_link_libraries(FlareLensFrameBenchmark PRIVATE FlareLensCore CUDA::cudart_static)
+   target_compile_options(FlareLensFrameBenchmark PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+   set_target_properties(FlareLensFrameBenchmark PROPERTIES CUDA_STANDARD 17 CUDA_ARCHITECTURES "${FLARE_CUDA_ARCHITECTURES}")
   else()
    message(WARNING "CUDA compiler not found; compiling CPU-only SmartFX plugin.")
   endif()
@@ -314,3 +342,12 @@ if(FLARELENS_BUILD_AE)
 endif()
 # End Windows-only AE integration; macOS uses cmake/MacOS.cmake.
 endif()
+# Visual Studio: group test and benchmark projects under a "Tests" solution
+# folder so FlareLensAE and FlareLensCore stay at the top of Solution Explorer.
+set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+get_property(FLARE_ALL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(FLARE_TARGET IN LISTS FLARE_ALL_TARGETS)
+ if(FLARE_TARGET MATCHES "(Test|Parity|Reference|Benchmark)$")
+  set_target_properties(${FLARE_TARGET} PROPERTIES FOLDER "Tests")
+ endif()
+endforeach()

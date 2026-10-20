@@ -74,7 +74,7 @@ PF_Err SPAPI drawing(const PF_ContextH ctx,DRAWBOT_DrawRef* r){
  *r=reinterpret_cast<DRAWBOT_DrawRef>(0x300);
  return PF_Err_NONE;
 }
-SPErr SPAPI acquire(const char* name,int32 version,const void** p){
+SPErr SPAPI acquire(const char* name,int version,const void** p){
  if(!name||!p)return 1;
  #define GIVE(N,V,T) if(!std::strcmp(name,N) && version==V){*p=&T;return 0;}
  GIVE(kDRAWBOT_DrawSuite,kDRAWBOT_DrawSuite_Version1,ds)
@@ -87,7 +87,7 @@ SPErr SPAPI acquire(const char* name,int32 version,const void** p){
  #undef GIVE
  return 1;
 }
-SPErr SPAPI release(const char*,int32){return 0;}
+SPErr SPAPI release(const char*,int){return 0;}
 }
 int main(){
  ds.GetSupplier=&get_supplier;ds.GetSurface=&get_surface;

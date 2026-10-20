@@ -1,5 +1,7 @@
 #include "FlareLensCore.hpp"
 #include "FlareLensOptics.hpp"
+#include "FlareLensThreadPool.hpp"
+#include "trace.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -11,21 +13,120 @@
 
 namespace fl {
 namespace {
-uint64_t optical_key(const LensSystem& lens,float sx,float sy){
+uint64_t mix_float(uint64_t h,float x){
+ uint32_t bits=0;std::memcpy(&bits,&x,sizeof(bits));
+ return (h^bits)*1099511628211ULL;
+}
+uint64_t geometry_key(const LensSystem& lens){
  uint64_t h=1469598103934665603ULL;
  const auto mix=[&](uint32_t x){h^=x;h*=1099511628211ULL;};
- const auto mix_float=[&](float x){uint32_t bits=0;std::memcpy(&bits,&x,sizeof(bits));mix(bits);};
  mix(uint32_t(lens.surfaces.size()));
- mix_float(lens.focal_length);mix_float(lens.sensor_z);
- mix_float(sx);mix_float(sy);
+ h=mix_float(h,lens.focal_length);h=mix_float(h,lens.sensor_z);
  for(const auto& s:lens.surfaces){
-  mix_float(s.radius);mix_float(s.z);mix_float(s.thickness);
-  mix_float(s.ior);mix_float(s.abbe_v);mix_float(s.semi_aperture);
+  h=mix_float(h,s.radius);h=mix_float(h,s.z);h=mix_float(h,s.thickness);
+  h=mix_float(h,s.ior);h=mix_float(h,s.abbe_v);h=mix_float(h,s.semi_aperture);
   mix(uint32_t(s.coating));mix(uint32_t(s.is_stop));
  }
  return h;
 }
+uint64_t optical_key(const LensSystem& lens,float sx,float sy){
+ return mix_float(mix_float(geometry_key(lens),sx),sy);
 }
+// The traced half of upstream filter_ghost_pairs() (ghost.cpp): the IOR
+// and intensity tests and the spread footprint of every pair, none of which
+// depend on the sensor size. Computed once per lens, one pair per pool task,
+// with the same traces and arithmetic as estimate_ghost_intensity() and
+// estimate_ghost_spread(); kept pairs stay in enumeration order.
+struct LensPairs {
+ std::vector<GhostPair> pairs;
+ std::vector<float> ghost_w,ghost_h; // spread footprint (mm), 0: too few hits
+};
+std::shared_ptr<const LensPairs> traced_pairs(const LensSystem& lens){
+ using Entry=std::pair<uint64_t,std::shared_ptr<const LensPairs>>;
+ static std::mutex mutex;
+ static std::deque<Entry> cache;
+ const uint64_t key=geometry_key(lens);
+ {
+  std::lock_guard<std::mutex> lock(mutex);
+  for(const auto& [candidate,traced]:cache)if(candidate==key)return traced;
+ }
+ const GhostConfig config{};
+ const auto all=enumerate_ghost_pairs(lens);
+ struct Probe {bool keep=false;float w=0,h=0;};
+ std::vector<Probe> probes(all.size());
+ parallel_for(int(all.size()),[&](int i){
+  const GhostPair& p=all[size_t(i)];
+  float ior_before_a=lens.ior_before(p.surf_a);
+  float ior_after_a=lens.surfaces[p.surf_a].ior;
+  float ior_before_b=lens.ior_before(p.surf_b);
+  float ior_after_b=lens.surfaces[p.surf_b].ior;
+  if(std::abs(ior_before_a-ior_after_a)<0.001f||
+     std::abs(ior_before_b-ior_after_b)<0.001f)return;
+  // estimate_ghost_intensity(): one on-axis ray at the pupil centre.
+  {
+   Ray ray;
+   ray.origin=Vec3f(0,0,lens.surfaces[0].z-20.0f);
+   ray.dir=Vec3f(0,0,1);
+   float total=0;
+   for(int ch=0;ch<3;++ch){
+    TraceResult r=trace_ghost_ray(ray,lens,p.surf_a,p.surf_b,config.wavelengths[ch]);
+    if(r.valid)total+=r.weight;
+   }
+   if(total/3.0f<config.min_intensity)return;
+  }
+  Probe probe;
+  probe.keep=true;
+  if(config.ghost_normalize){
+   // estimate_ghost_spread(): bounding box of an 8x8 on-axis pupil grid.
+   constexpr int G=8;
+   float front_R=lens.surfaces[0].semi_aperture;
+   float start_z=lens.surfaces[0].z-20.0f;
+   float min_x=1e30f,max_x=-1e30f;
+   float min_y=1e30f,max_y=-1e30f;
+   int valid_count=0;
+   for(int gy=0;gy<G;++gy){
+    for(int gx=0;gx<G;++gx){
+     float u=((gx+0.5f)/G)*2.0f-1.0f;
+     float v=((gy+0.5f)/G)*2.0f-1.0f;
+     if(u*u+v*v>1.0f)continue;
+     Ray ray;
+     ray.origin=Vec3f(u*front_R,v*front_R,start_z);
+     ray.dir=Vec3f(0,0,1);
+     TraceResult res=trace_ghost_ray(ray,lens,p.surf_a,p.surf_b,config.wavelengths[1]);
+     if(!res.valid)continue;
+     min_x=std::min(min_x,res.position.x);
+     max_x=std::max(max_x,res.position.x);
+     min_y=std::min(min_y,res.position.y);
+     max_y=std::max(max_y,res.position.y);
+     ++valid_count;
+    }
+   }
+   if(valid_count>=2){
+    probe.w=std::max(max_x-min_x,0.01f);
+    probe.h=std::max(max_y-min_y,0.01f);
+   }
+  }
+  probes[size_t(i)]=probe;
+ });
+ auto created=std::make_shared<LensPairs>();
+ for(size_t i=0;i<all.size();i++){
+  if(!probes[i].keep)continue;
+  created->pairs.push_back(all[i]);
+  created->ghost_w.push_back(probes[i].w);
+  created->ghost_h.push_back(probes[i].h);
+ }
+ {
+  std::lock_guard<std::mutex> lock(mutex);
+  for(const auto& [candidate,traced]:cache)if(candidate==key)return traced;
+  if(cache.size()>=24)cache.pop_front();
+  cache.emplace_back(key,created);
+ }
+ return created;
+}
+}
+// filter_ghost_pairs() in two cached stages: traced_pairs() once per lens,
+// then estimate_ghost_spread()'s area-boost arithmetic for this sensor, so a
+// new FOV does not trace again. Identical pairs and boosts.
 std::shared_ptr<const PairSelection> cached_pairs(
  const LensSystem& lens,float sensor_half_w,float sensor_half_h){
  using Entry=std::pair<uint64_t,std::shared_ptr<const PairSelection>>;
@@ -37,10 +138,21 @@ std::shared_ptr<const PairSelection> cached_pairs(
   for(const auto& [candidate,pairs]:cache)if(candidate==key)return pairs;
  }
  // Heavy ray/spread estimates run *outside* the global lock.
+ const auto traced=traced_pairs(lens);
  auto created=std::make_shared<PairSelection>();
- GhostConfig cfg{};
- filter_ghost_pairs(lens,sensor_half_w,sensor_half_h,cfg,
-                    created->pairs,created->boosts);
+ const GhostConfig cfg{};
+ created->pairs=traced->pairs;
+ created->boosts.reserve(traced->pairs.size());
+ for(size_t i=0;i<traced->pairs.size();i++){
+  float boost=1.0f;
+  if(cfg.ghost_normalize&&traced->ghost_w[i]>0){
+   float sensor_w=2.0f*sensor_half_w;
+   float sensor_h=2.0f*sensor_half_h;
+   float area_ratio=(traced->ghost_w[i]*traced->ghost_h[i])/(sensor_w*sensor_h);
+   boost=std::clamp(area_ratio,1.0f,cfg.max_area_boost);
+  }
+  created->boosts.push_back(boost);
+ }
  {
   std::lock_guard<std::mutex> lock(mutex);
   for(const auto& [candidate,pairs]:cache)if(candidate==key)return pairs;
