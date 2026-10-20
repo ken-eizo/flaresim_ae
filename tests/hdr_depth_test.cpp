@@ -26,12 +26,12 @@ static PF_Err world_format(const PF_EffectWorld*,PF_PixelFormat* ptr){
  if(!ptr)return PF_Err_BAD_CALLBACK_PARAM;
  *ptr=pixel_format;return PF_Err_NONE;
 }
-static SPErr SPAPI acquire(const char* name,int32 ver,const void** ptr){
+static SPErr SPAPI acquire(const char* name,int ver,const void** ptr){
  if(!name||!ptr||std::strcmp(name,kPFWorldSuite)!=0||
     ver!=kPFWorldSuiteVersion2)return 1;
  *ptr=&world_suite;return 0;
 }
-static SPErr SPAPI release(const char*,int32){return 0;}
+static SPErr SPAPI release(const char*,int){return 0;}
 static PF_Err abort_ok(PF_ProgPtr){return PF_Err_NONE;}
 static std::vector<float> render(Main effect,PF_InData& in,PF_PixelFormat format,
                                   int width,int height){

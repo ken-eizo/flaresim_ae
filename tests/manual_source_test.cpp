@@ -25,11 +25,11 @@ static PF_Err add(PF_ProgPtr,PF_ParamIndex index,PF_ParamDefPtr value){
 static PF_Err pixel_fmt(const PF_EffectWorld*,PF_PixelFormat* out){
  if(!out)return PF_Err_BAD_CALLBACK_PARAM;*out=format;return PF_Err_NONE;
 }
-static SPErr SPAPI acquire(const char* name,int32 ver,const void** suite){
+static SPErr SPAPI acquire(const char* name,int ver,const void** suite){
  if(!name||!suite||std::strcmp(name,kPFWorldSuite)||ver!=kPFWorldSuiteVersion2)
   return 1;*suite=&ws;return 0;
 }
-static SPErr SPAPI release(const char*,int32){return 0;}
+static SPErr SPAPI release(const char*,int){return 0;}
 static PF_Err abort_ok(PF_ProgPtr){return PF_Err_NONE;}
 static std::vector<float> draw(Main effect,PF_InData& host,bool detect,
  bool factory_area,bool floating,int width,int height,int x,int y,int mode=2){

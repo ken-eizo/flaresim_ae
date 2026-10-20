@@ -12,7 +12,7 @@ struct DetectionSettings {
  int width=0,height=0,input_pitch_bytes=0;
  int scan_step=4;
  int max_sources=512;
- int cluster_radius=0;
+ float cluster_radius=0.f; // in rendered pixels, like width/height
  float source_threshold=2.f,source_cap=0.f;
  float tint_r=1.f,tint_g=1.f,tint_b=1.f;
  bool gate_alpha=false;

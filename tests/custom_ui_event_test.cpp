@@ -20,8 +20,8 @@ static PF_Err collect(PF_ProgPtr,PF_ParamIndex i,PF_ParamDefPtr p){
  if(i!=-1||!p)return PF_Err_BAD_CALLBACK_PARAM;
  defs.push_back(*p);fl_mock::activate(defs.back());return PF_Err_NONE;
 }
-static SPErr SPAPI unavailable(const char*,int32,const void**){return 1;}
-static SPErr SPAPI release(const char*,int32){return 0;}
+static SPErr SPAPI unavailable(const char*,int,const void**){return 1;}
+static SPErr SPAPI release(const char*,int){return 0;}
 int main(){
  wchar_t filename[MAX_PATH]{};
  if(!GetModuleFileNameW(nullptr,filename,MAX_PATH))return 1;
