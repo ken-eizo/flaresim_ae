@@ -226,8 +226,8 @@ static int render_smart_empty(Main effect,PF_InData& in){
 
 
 // Same physical source and Nuke optics must give exactly the same pixels
-// regardless of AE checkout ROI. Point Control remains full-resolution even
-// when the host asks for a half-resolution buffer.
+// regardless of AE checkout ROI. Like After Effects, the host scales the
+// Point Control into the half-resolution buffer it asks for.
 static int render_roi_and_downsample(Main effect,PF_InData& in){
  constexpr int full_w=960,full_h=540;
  auto render_world=[&](int source_w,int source_h,
@@ -283,7 +283,7 @@ static int render_roi_and_downsample(Main effect,PF_InData& in){
    }
   }
   const auto half=render_world(2*full_w,2*full_h,1,2,0,0,
-                               full_w,full_h,760,420);
+                               full_w,full_h,380,210);
   if(half.size()!=baseline.size())return 52;
   for(size_t i=0;i<half.size();i++)
    if(std::memcmp(&half[i],&baseline[i],sizeof(PF_Pixel))!=0){

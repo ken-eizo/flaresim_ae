@@ -163,8 +163,9 @@ static int one_render(Main effect,PF_InData& in,int mode,
  in.width=width*(adaptive?2:1);in.height=height*(adaptive?2:1);
  in.downsample_x.num=1;in.downsample_x.den=adaptive?2:1;
  in.downsample_y.num=1;in.downsample_y.den=adaptive?2:1;
- params[0].u.td.x_value=FLOAT2FIX(in.width*.72f);
- params[0].u.td.y_value=FLOAT2FIX(in.height*.25f);
+ // AE hands the point over in the rendered (Half: downsampled) world.
+ params[0].u.td.x_value=FLOAT2FIX(width*.72f);
+ params[0].u.td.y_value=FLOAT2FIX(height*.25f);
  params[2].u.sd.value=many>0?12:64; // 512 multi-source GPU integration
  params[5].u.bd.value=detect?TRUE:FALSE; // actual Nuke HDR detector
  params[8].u.pd.value=quick_preset; // original 12 AE preset indices
@@ -243,8 +244,8 @@ static int one_render(Main effect,PF_InData& in,int mode,
  // The native AE effect uses ALL active lens pairs, unlike the generic
  // Core Settings default max_pairs=40 used for tiny standalone tests.
  // Match the host's quantized 16.16 Point Control exactly.
- const float sx=FIX_2_FLOAT(params[0].u.td.x_value)/float(in.width);
- const float sy=FIX_2_FLOAT(params[0].u.td.y_value)/float(in.height);
+ const float sx=FIX_2_FLOAT(params[0].u.td.x_value)/float(width);
+ const float sy=FIX_2_FLOAT(params[0].u.td.y_value)/float(height);
  const std::vector<fl::Source> lights{detect?
   fl::Source{float(block_x+2)/width,float(block_y+2)/height,100,80,60}:
   fl::Source{sx,sy,30000,30000,30000}};

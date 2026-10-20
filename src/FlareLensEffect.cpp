@@ -375,28 +375,30 @@ PF_Err checkout_args(PF_InData* in,FrameArgs& a){
  return PF_Err_NONE;
 }
 
+// cluster_radius is in rendered pixels (the slider times the downsample).
 std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
                                      const FrameArgs& a,int width,int height,
-                                     float manual_scale_x=1.f,float manual_scale_y=1.f){
+                                     const fl::HostGeometry& geometry,
+                                     float cluster_radius){
  std::vector<fl::Source> sources;
  if(width<=0||height<=0)return sources;
- // AE's point control uses layer-space coordinates and supports off-frame lights.
- const float px=std::isfinite(a.light_x)?a.light_x*manual_scale_x/width:0.5f;
- const float py=std::isfinite(a.light_y)?a.light_y*manual_scale_y/height:0.5f;
+ // AE's point control arrives in rendered pixels and supports off-frame lights.
+ const float px=std::isfinite(a.light_x)?geometry.normalized_x(a.light_x):0.5f;
+ const float py=std::isfinite(a.light_y)?geometry.normalized_y(a.light_y):0.5f;
  if(!a.auto_detect){
   // Nuke normally has one source per *image block*, not one per luminous
   // object. Compress a constant-radiance circular HDR patch into its
   // corresponding Nuke block-source sum without changing Fresnel or gain.
   float r=fl::nuke_equivalent_manual_radiance(
-      a.manual_radiance,a.manual_diameter_px,manual_scale_x,manual_scale_y,
-      a.scan_step,a.max_sources);
+      a.manual_radiance,a.manual_diameter_px,geometry.downsample_x,
+      geometry.downsample_y,a.scan_step,a.max_sources);
   if(a.fhd_stable_brightness)
     r*=fl::fhd_reference_emission_scale(width,height);
   sources.push_back({px,py,r*a.tint_r,r*a.tint_g,r*a.tint_b});
   return sources;
  }
  const int limit=std::clamp(a.preview?a.preview_max:a.max_sources,1,2048);
- const int candidate_limit=a.cluster_radius>0?std::min(8192,limit*4):limit;
+ const int candidate_limit=cluster_radius>0?std::min(8192,limit*4):limit;
  // A bounded priority queue retains the best K samples, not the entire frame.
  struct Ranked {float score;int index;fl::Source src;};
  auto better=[](const Ranked& x,const Ranked& y){
@@ -449,8 +451,8 @@ std::vector<fl::Source> find_sources(const PF_LayerDef* input,int depth,
  while(!best.empty()){ranked.push_back(best.top());best.pop();}
  std::sort(ranked.begin(),ranked.end(),better);
  for(const auto& s:ranked)sources.push_back(s.src);
- if(a.cluster_radius>0&&sources.size()>1){
-  const float radius2=float(a.cluster_radius)*a.cluster_radius;
+ if(cluster_radius>0&&sources.size()>1){
+  const float radius2=cluster_radius*cluster_radius;
   std::vector<fl::Source> clustered;
   std::vector<uint8_t> consumed(sources.size());
   for(size_t i=0;i<sources.size();i++){
@@ -580,12 +582,13 @@ PF_Err render_worlds(PF_InData* in,PF_OutData* out,const PF_LayerDef* input,
   double(args.ghost_blur),active_catalog_id(args));
  fl::host_trace(args.host_trace,"CPU_BEGIN",render_begin);
  fl::Settings settings=optical_settings(args,in);
- // Manual position is in full-resolution layer coords; never normalize by
- // the size of an AE checkout ROI or a half-resolution SmartFX world.
- // For detected sources we must sample the full requested frame.
- // The source scanner uses input origin for ROI mapping in pixel().
+ // The manual position is a fraction of the whole sensor, never of an AE
+ // checkout ROI. For detected sources we must sample the full requested
+ // frame; the source scanner uses input origin for ROI mapping in pixel().
+ // Cluster Radius is a layer-pixel distance, so it scales with the world.
+ const float pixel_scale=std::sqrt(geometry.downsample_x*geometry.downsample_y);
  const auto sources=find_sources(input,source_depth,args,frame_w,frame_h,
-                                 geometry.light_scale_x,geometry.light_scale_y);
+                                 geometry,float(args.cluster_radius)*pixel_scale);
  // A ray-hit diagnostic shows valid optical geometry independently of
  // Fresnel energy, exposure and 8/16/32bpc output quantization.
  if(std::clamp(args.output_mode,1,8)==7)settings.debug_ray_density=true;
@@ -1002,7 +1005,7 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
       geometry.normalized_y(args.light_y):.5f;
    float radiance=fl::nuke_equivalent_manual_radiance(
      args.manual_radiance,args.manual_diameter_px,
-     geometry.light_scale_x,geometry.light_scale_y,
+     geometry.downsample_x,geometry.downsample_y,
      args.scan_step,args.max_sources);
    if(args.fhd_stable_brightness)
      radiance*=fl::fhd_reference_emission_scale(w,h);
@@ -1020,7 +1023,9 @@ PF_Err smart_render_gpu(PF_InData* in,PF_OutData* out,PF_SmartRenderExtra* extra
     detect.input_pitch_bytes=input?input->rowbytes:0;
     detect.scan_step=std::clamp(reduced?args.preview_step:args.scan_step,1,32);
     detect.max_sources=std::clamp(reduced?args.preview_max:args.max_sources,1,2048);
-    detect.cluster_radius=args.cluster_radius;
+    // Cluster Radius is a layer-pixel distance, so it scales with the world.
+    detect.cluster_radius=float(args.cluster_radius)*
+       std::sqrt(geometry.downsample_x*geometry.downsample_y);
     detect.source_threshold=args.threshold;
     detect.source_cap=args.source_cap;
     detect.tint_r=args.tint_r;detect.tint_g=args.tint_g;detect.tint_b=args.tint_b;
